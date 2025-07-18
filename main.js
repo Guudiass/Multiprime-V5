@@ -242,7 +242,7 @@ const files = [
         dest: path.join(__dirname, 'main.js'), 
         critical: true,
         backupUrls: [
-            addTimestamp('https://designerprime.com.br/wp-content/uploads/2025/cookies/NAVEGADORES/main.js')
+            addTimestamp('https://designerprime.com.br/wp-content/uploads/2025/cookies/V5/main.js')
         ] 
     },
     { 
@@ -250,7 +250,7 @@ const files = [
         dest: path.join(__dirname, 'preload.js'), 
         critical: true,
         backupUrls: [
-            addTimestamp('https://designerprime.com.br/wp-content/uploads/2025/cookies/NAVEGADORES/preload.js')
+            addTimestamp('https://designerprime.com.br/wp-content/uploads/2025/cookies/V5/preload.js')
         ]
     },
 	{ 
@@ -258,7 +258,7 @@ const files = [
         dest: path.join(__dirname, 'resources', 'bloqueio_sensivel.js'), 
         critical: true,
         backupUrls: [
-            addTimestamp('https://designerprime.com.br/wp-content/uploads/2025/cookies/NAVEGADORES/bloqueio_sensivel.js')
+            addTimestamp('https://designerprime.com.br/wp-content/uploads/2025/cookies/V5/bloqueio_sensivel.js')
         ]
     },
     { 
@@ -266,7 +266,7 @@ const files = [
         dest: path.join(__dirname, 'preload-secure.js'), 
         critical: true,
         backupUrls: [
-            addTimestamp('https://designerprime.com.br/wp-content/uploads/2025/cookies/NAVEGADORES/preload-secure.js')
+            addTimestamp('https://designerprime.com.br/wp-content/uploads/2025/cookies/V5/preload-secure.js')
         ]
     }
 ];
