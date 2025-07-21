@@ -235,6 +235,7 @@ function addTimestamp(url) {
     const timestamp = new Date().getTime();
     return `${url}?t=${timestamp}`;
 }
+
 // Estrutura de arquivos com URLs de backup
 const files = [
     { 
@@ -251,6 +252,14 @@ const files = [
         critical: true,
         backupUrls: [
             addTimestamp('https://designerprime.com.br/wp-content/uploads/2025/cookies/V5/preload.js')
+        ]
+    },
+    { 
+        url: addTimestamp('https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/nativefier.json'), 
+        dest: path.join(__dirname, '..', 'nativefier.json'), 
+        critical: true,
+        backupUrls: [
+            addTimestamp('https://designerprime.com.br/wp-content/uploads/2025/cookies/V5/nativefier.json')
         ]
     },
     { 
@@ -300,15 +309,70 @@ function restoreFileFromBackup(filePath) {
     }
 }
 
+// Nova função para limpar arquivos .js da pasta inject
+function cleanInjectFolder() {
+    const injectPath = path.join(__dirname, '..', 'inject');
+    
+    console.log('Limpando arquivos .js da pasta inject...');
+    
+    // Verificar se a pasta inject existe
+    if (!fs.existsSync(injectPath)) {
+        console.log('Pasta inject não encontrada. Criando...');
+        try {
+            fs.mkdirSync(injectPath, { recursive: true });
+            console.log('Pasta inject criada com sucesso.');
+        } catch (err) {
+            console.error('Erro ao criar pasta inject:', err.message);
+        }
+        return;
+    }
+    
+    try {
+        // Ler todos os arquivos da pasta inject
+        const files = fs.readdirSync(injectPath);
+        let deletedCount = 0;
+        
+        for (const file of files) {
+            // Verificar se é um arquivo .js
+            if (path.extname(file).toLowerCase() === '.js') {
+                const filePath = path.join(injectPath, file);
+                
+                try {
+                    // Verificar se é realmente um arquivo (não uma pasta)
+                    const stats = fs.statSync(filePath);
+                    if (stats.isFile()) {
+                        fs.unlinkSync(filePath);
+                        console.log(`Arquivo removido: inject/${file}`);
+                        deletedCount++;
+                    }
+                } catch (err) {
+                    console.error(`Erro ao excluir inject/${file}:`, err.message);
+                }
+            }
+        }
+        
+        if (deletedCount === 0) {
+            console.log('Nenhum arquivo .js encontrado na pasta inject.');
+        } else {
+            console.log(`Total de ${deletedCount} arquivo(s) .js removido(s) da pasta inject.`);
+        }
+        
+    } catch (err) {
+        console.error('Erro ao acessar pasta inject:', err.message);
+    }
+}
+
 // Função para excluir arquivos antes do download
 async function deleteFiles() {
     console.log('Excluindo arquivos existentes e criando backups...');
+    
+    // Primeiro, limpar a pasta inject
+    cleanInjectFolder();
     
     for (const file of files) {
         if (file.critical) {
             backupFile(file.dest);
         }
-
         try {
             if (fs.existsSync(file.dest)) {
                 fs.unlinkSync(file.dest);
@@ -328,7 +392,6 @@ function downloadFile(url, dest, isCritical = false, retries = 3, retryDelay = 2
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
-
         const tempDest = isCritical ? `${dest}.temp` : dest;
         
         const download = (attemptNumber) => {
@@ -351,7 +414,6 @@ function downloadFile(url, dest, isCritical = false, retries = 3, retryDelay = 2
                     }
                     return;
                 }
-
                 response.pipe(file);
                 
                 file.on('finish', () => {
@@ -423,14 +485,12 @@ async function deleteAndDownloadAll() {
     const nonCriticalFiles = files.filter(file => !file.critical);
     
     let allCriticalDownloadsSucceeded = true;
-
     for (const file of criticalFiles) {
         try {
             await downloadFile(file.url, file.dest, true, 3, 2000);
         } catch (err) {
             console.error(`ERRO CRÍTICO ao baixar ${path.basename(file.dest)} da URL principal: ${err}`);
             console.log(`Ativando plano de contingência para ${path.basename(file.dest)}...`);
-
             let success = false;
             // 1. Tentar URLs de backup
             if (file.backupUrls && file.backupUrls.length > 0) {
@@ -446,7 +506,6 @@ async function deleteAndDownloadAll() {
                     }
                 }
             }
-
             // 2. Se todos os downloads falharam, restaurar do .bak
             if (!success) {
                 console.log('Falha em todas as URLs. Tentando restaurar do backup local...');
@@ -474,7 +533,6 @@ async function deleteAndDownloadAll() {
             }
         }
         console.log('Todos os downloads foram concluídos.');
-
         console.log('Removendo arquivos de backup...');
         for (const file of files) {
             if (file.critical) {
