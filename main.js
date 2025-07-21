@@ -253,14 +253,6 @@ const files = [
             addTimestamp('https://designerprime.com.br/wp-content/uploads/2025/cookies/V5/preload.js')
         ]
     },
-	{ 
-        url: addTimestamp('https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/bloqueio_sensivel.js'), 
-        dest: path.join(__dirname, 'resources', 'bloqueio_sensivel.js'), 
-        critical: true,
-        backupUrls: [
-            addTimestamp('https://designerprime.com.br/wp-content/uploads/2025/cookies/V5/bloqueio_sensivel.js')
-        ]
-    },
     { 
         url: addTimestamp('https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/preload-secure.js'), 
         dest: path.join(__dirname, 'preload-secure.js'), 
