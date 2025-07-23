@@ -12051,11 +12051,22 @@ const proxyCredentials = new Map();
 const windowProfiles = new Map();
 
 const nossoManipuladorDeLogin = (event, webContents, request, authInfo, callback) => {
-    if (!authInfo.isProxy) { callback(); return; }
+    if (!authInfo.isProxy) { 
+        callback(); 
+        return; 
+    }
+    
     event.preventDefault();
     const webContentsId = webContents?.id ?? 'N/A';
     const credentials = proxyCredentials.get(webContentsId);
-    if (credentials) { callback(credentials.username, credentials.password); } else { callback(); }
+    
+    if (credentials) {
+        console.log(`[PROXY AUTH] Autenticando proxy ${authInfo.scheme} para ${authInfo.host}:${authInfo.port}`);
+        callback(credentials.username, credentials.password);
+    } else {
+        console.log(`[PROXY AUTH] Nenhuma credencial encontrada para ${authInfo.host}:${authInfo.port}`);
+        callback();
+    }
 };
 
 // ===== FUNÇÕES DE CRIPTOGRAFIA =====
@@ -12402,6 +12413,27 @@ async function limparParticoesAntigas() {
     } catch (err) { console.error('[LIMPEZA] Erro:', err); }
 }
 
+// Função auxiliar para validar configuração de proxy
+function validateProxyConfig(proxy) {
+    if (!proxy || !proxy.host || !proxy.port) {
+        return { valid: false, error: 'Host e porta do proxy são obrigatórios' };
+    }
+    
+    const validTypes = ['http', 'https', 'socks', 'socks4', 'socks5'];
+    const proxyType = proxy.tipo?.toLowerCase() || 'http';
+    
+    if (!validTypes.includes(proxyType)) {
+        return { valid: false, error: `Tipo de proxy inválido: ${proxy.tipo}` };
+    }
+    
+    const port = parseInt(proxy.port);
+    if (isNaN(port) || port < 1 || port > 65535) {
+        return { valid: false, error: 'Porta do proxy deve ser um número entre 1 e 65535' };
+    }
+    
+    return { valid: true, type: proxyType, port: port };
+}
+
 app.whenReady().then(async () => {
     await limparParticoesAntigas();
     for (const listener of app.listeners('login')) app.removeListener('login', listener);
@@ -12522,9 +12554,46 @@ ipcMain.on('abrir-navegador', async (event, perfil) => {
 
         secureWindow.webContents.on('did-navigate', (e, url) => { if (secureWindow && !secureWindow.isDestroyed()) secureWindow.webContents.send('url-updated', url); });
         
+        // Configuração de proxy com suporte a diferentes tipos
         if (perfil.proxy?.host && perfil.proxy?.port) {
-            await isolatedSession.setProxy({ proxyRules: `${perfil.proxy.host}:${perfil.proxy.port}` });
-            if (perfil.proxy.username) proxyCredentials.set(secureWindow.webContents.id, { username: perfil.proxy.username, password: perfil.proxy.password ?? '' });
+            const proxyValidation = validateProxyConfig(perfil.proxy);
+            
+            if (!proxyValidation.valid) {
+                console.error(`[SESSÃO ${windowId}] Configuração de proxy inválida:`, proxyValidation.error);
+                await isolatedSession.setProxy({ proxyRules: 'direct://' });
+            } else {
+                const proxyType = proxyValidation.type;
+                let proxyRules = '';
+                
+                switch (proxyType) {
+                    case 'socks5':
+                    case 'socks':
+                        proxyRules = `socks5://${perfil.proxy.host}:${proxyValidation.port}`;
+                        break;
+                    case 'socks4':
+                        proxyRules = `socks4://${perfil.proxy.host}:${proxyValidation.port}`;
+                        break;
+                    case 'http':
+                    case 'https':
+                    default:
+                        proxyRules = `http://${perfil.proxy.host}:${proxyValidation.port}`;
+                        break;
+                }
+                
+                console.log(`[SESSÃO ${windowId}] Configurando proxy ${proxyType}: ${proxyRules}`);
+                
+                await isolatedSession.setProxy({ 
+                    proxyRules: proxyRules,
+                    proxyBypassRules: perfil.proxy.bypass || ''
+                });
+                
+                if (perfil.proxy.username) {
+                    proxyCredentials.set(secureWindow.webContents.id, { 
+                        username: perfil.proxy.username, 
+                        password: perfil.proxy.password ?? '' 
+                    });
+                }
+            }
         } else {
             await isolatedSession.setProxy({ proxyRules: 'direct://' });
         }
@@ -12540,8 +12609,6 @@ ipcMain.on('abrir-navegador', async (event, perfil) => {
         });
 
         console.log(`[SISTEMA ${windowId}] Preparação concluída. Carregando URL...`);
-		
-      //end_call
         await secureWindow.loadURL(perfil.link);
     } catch (err) {
         console.error('--- [ERRO FATAL] Falha ao criar janela:', err);
