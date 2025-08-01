@@ -1,4 +1,4 @@
-// preload-secure.js
+	// preload-secure.js
 
 // ===================================
 // Camuflagem Anti-Detecção de Bots
@@ -277,19 +277,39 @@ console.log('%c[PRELOAD SCRIPT VFINAL] Todas as correções aplicadas!', 'color:
         }, 4000);
     }
 
-    function applyLayoutAdjustment() {
-        let styleEl = document.getElementById('secure-browser-layout-adjust');
-        if (!styleEl) {
-            styleEl = document.createElement('style');
-            styleEl.id = 'secure-browser-layout-adjust';
-            (document.head || document.documentElement).appendChild(styleEl);
-        }
-        // FIX: Usa padding-top no body para evitar a "tarja branca"
-        styleEl.textContent = `
-            :root { --secure-browser-titlebar-height: ${TITLE_BAR_HEIGHT}px; }
-            body { padding-top: var(--secure-browser-titlebar-height) !important; }
-        `;
+    // ✅ NOVA VERSÃO FINAL (USAR ESTA)
+	function applyLayoutAdjustment() {
+    let styleEl = document.getElementById('secure-browser-layout-adjust');
+    if (!styleEl) {
+        styleEl = document.createElement('style');
+        styleEl.id = 'secure-browser-layout-adjust';
+        (document.head || document.documentElement).appendChild(styleEl);
     }
+    
+    // Esta é a correção final de layout que resolve a barra de rolagem.
+    styleEl.textContent = `
+        :root {
+            --secure-browser-titlebar-height: ${TITLE_BAR_HEIGHT}px;
+        }
+
+        html {
+            /* Impede a barra de rolagem no elemento raiz para que a nossa barra não a cubra. */
+            overflow: hidden !important;
+        }
+
+        body {
+            /* Transforma o body no container de rolagem principal. */
+            overflow-y: auto !important;
+            height: 100vh !important;
+
+            /* Mantém nosso ajuste para a barra de título. */
+            padding-top: var(--secure-browser-titlebar-height) !important;
+
+            /* Essencial para que o padding não aumente a altura total de 100vh. */
+            box-sizing: border-box !important;
+        }
+    `;
+	}
 
     function adjustFixedHeaders() {
         const elements = document.querySelectorAll('body *');
