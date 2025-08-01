@@ -396,7 +396,9 @@ console.log('%c[PRELOAD SCRIPT V8.18] V8.10 + Exceções: Canva, Leonardo, Place
         }
     }
 
-    // ========== PROTEÇÃO ANTI-TOOLTIP COM EXCEÇÕES PARA SITES ESPECÍFICOS ==========
+    
+	
+	// ========== PROTEÇÃO ANTI-TOOLTIP COM EXCEÇÕES PARA SITES ESPECÍFICOS ==========
     function setupAntiTooltipProtection() {
         // *** VERIFICA SE É UM DOS SITES COM EXCEÇÃO ***
         const isCanva = window.location.hostname.includes('canva.com');
@@ -404,14 +406,18 @@ console.log('%c[PRELOAD SCRIPT V8.18] V8.10 + Exceções: Canva, Leonardo, Place
         const isPlaceit = window.location.hostname.includes('placeit.net');
         const isHailuo = window.location.hostname.includes('hailuoai.video');
         const isVectorizer = window.location.hostname.includes('vectorizer.ai');
+        const isEnvatoElements = window.location.hostname.includes('elements.envato.com');
+        const isRunway = window.location.hostname.includes('app.runwayml.com');
         
-        if (isCanva || isLeonardo || isPlaceit || isHailuo || isVectorizer) {
+        if (isCanva || isLeonardo || isPlaceit || isHailuo || isVectorizer || isEnvatoElements || isRunway) {
             let siteName = '';
             if (isCanva) siteName = 'Canva';
             else if (isLeonardo) siteName = 'Leonardo.ai';
             else if (isPlaceit) siteName = 'Placeit.net';
             else if (isHailuo) siteName = 'HailuoAI Video';
             else if (isVectorizer) siteName = 'Vectorizer.ai';
+            else if (isEnvatoElements) siteName = 'Envato Elements';
+            else if (isRunway) siteName = 'Runway ML';
             
             console.log(`[SECURE BROWSER] ${siteName} detectado - Tooltips liberados`);
             
@@ -512,6 +518,129 @@ console.log('%c[PRELOAD SCRIPT V8.18] V8.10 + Exceções: Canva, Leonardo, Place
             }, true);
         }
     }
+	
+	// ========== PROTEÇÃO ANTI-TOOLTIP COM EXCEÇÕES PARA SITES ESPECÍFICOS ==========
+    function setupAntiTooltipProtection() {
+        // *** VERIFICA SE É UM DOS SITES COM EXCEÇÃO ***
+        const isCanva = window.location.hostname.includes('canva.com');
+        const isLeonardo = window.location.hostname.includes('leonardo.ai');
+        const isPlaceit = window.location.hostname.includes('placeit.net');
+        const isHailuo = window.location.hostname.includes('hailuoai.video');
+        const isVectorizer = window.location.hostname.includes('vectorizer.ai');
+        const isEnvatoElements = window.location.hostname.includes('elements.envato.com');
+        const isRunway = window.location.hostname.includes('app.runwayml.com');
+        
+        if (isCanva || isLeonardo || isPlaceit || isHailuo || isVectorizer || isEnvatoElements || isRunway) {
+            let siteName = '';
+            if (isCanva) siteName = 'Canva';
+            else if (isLeonardo) siteName = 'Leonardo.ai';
+            else if (isPlaceit) siteName = 'Placeit.net';
+            else if (isHailuo) siteName = 'HailuoAI Video';
+            else if (isVectorizer) siteName = 'Vectorizer.ai';
+            else if (isEnvatoElements) siteName = 'Envato Elements';
+            else if (isRunway) siteName = 'Runway ML';
+            
+            console.log(`[SECURE BROWSER] ${siteName} detectado - Tooltips liberados`);
+            
+            // Nos sites com exceção, só remove atributos dos nossos botões, SEM bloquear tooltips do site
+            const observer = new MutationObserver(() => {
+                if (shadowRoot) {
+                    const buttons = shadowRoot.querySelectorAll('button');
+                    buttons.forEach(btn => {
+                        btn.removeAttribute('title');
+                        btn.removeAttribute('aria-label');
+                        btn.removeAttribute('data-tooltip');
+                        btn.removeAttribute('data-title');
+                    });
+                }
+            });
+            
+            if (shadowRoot) {
+                observer.observe(shadowRoot, { childList: true, subtree: true, attributes: true });
+            }
+            return; // SAI SEM APLICAR BLOQUEIOS NOS SITES COM EXCEÇÃO
+        }
+        
+        // *** RESTO IGUAL À V8.10 PARA TODOS OS OUTROS SITES ***
+        
+        // Bloqueia tooltips e popups que podem aparecer sobre a barra
+        const antiTooltipStyle = document.createElement('style');
+        antiTooltipStyle.id = 'secure-browser-anti-tooltip';
+        antiTooltipStyle.textContent = `
+            /* Bloqueia qualquer tooltip ou popup que possa aparecer na área da barra */
+            body > *:not(#${CONTAINER_ID}) {
+                /* Impede que elementos do site apareçam sobre nossa barra */
+                z-index: 2147483646 !important;
+            }
+            
+            /* Bloqueia tooltips comuns */
+            [role="tooltip"],
+            .tooltip,
+            .tooltiptext,
+            .ui-tooltip,
+            [data-tooltip],
+            [title]:hover::after,
+            [title]:hover::before {
+                display: none !important;
+                visibility: hidden !important;
+                opacity: 0 !important;
+                pointer-events: none !important;
+            }
+            
+            /* Proteção específica para a área da nossa barra */
+            body::before {
+                content: '';
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: ${TITLE_BAR_HEIGHT}px;
+                z-index: 2147483646;
+                pointer-events: none;
+                background: transparent;
+            }
+        `;
+        
+        (document.head || document.documentElement).appendChild(antiTooltipStyle);
+        
+        // Remove atributos que podem gerar tooltips nos nossos botões
+        const observer = new MutationObserver(() => {
+            if (shadowRoot) {
+                const buttons = shadowRoot.querySelectorAll('button');
+                buttons.forEach(btn => {
+                    // Remove qualquer atributo que possa gerar tooltip
+                    btn.removeAttribute('title');
+                    btn.removeAttribute('aria-label');
+                    btn.removeAttribute('data-tooltip');
+                    btn.removeAttribute('data-title');
+                });
+            }
+        });
+        
+        if (shadowRoot) {
+            observer.observe(shadowRoot, { childList: true, subtree: true, attributes: true });
+        }
+        
+        // Intercepta eventos de mouseover na nossa barra para prevenir tooltips
+        if (container) {
+            container.addEventListener('mouseover', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+            }, true);
+            
+            container.addEventListener('mouseenter', (e) => {
+                // Remove qualquer tooltip visível quando o mouse entra na nossa barra
+                const tooltips = document.querySelectorAll('[role="tooltip"], .tooltip, .ui-tooltip');
+                tooltips.forEach(tooltip => {
+                    tooltip.style.display = 'none';
+                    tooltip.style.visibility = 'hidden';
+                    tooltip.style.opacity = '0';
+                });
+            }, true);
+        }
+    }
+	
+	
 
     function applyLayoutAdjustment() {
         let styleEl = document.getElementById('secure-browser-layout-adjust');
