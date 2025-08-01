@@ -1,8 +1,6 @@
-	// preload-secure.js
+// preload-secure.js
 
-// ===================================
 // Camuflagem Anti-Detecção de Bots
-// ===================================
 Object.defineProperty(navigator, 'webdriver', { get: () => false });
 Object.defineProperty(navigator, 'plugins', {
     get: () => [
@@ -11,15 +9,13 @@ Object.defineProperty(navigator, 'plugins', {
         { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
     ],
 });
+
 const originalQuery = window.navigator.permissions.query;
 window.navigator.permissions.query = (parameters) =>
     parameters.name === 'notifications'
         ? Promise.resolve({ state: Notification.permission })
         : originalQuery(parameters);
 
-// ===================================
-// Lógica de Sessão e IndexedDB
-// ===================================
 const { ipcRenderer } = require('electron');
 
 ipcRenderer.on('inject-session-data', (event, sessionData) => {
@@ -49,6 +45,7 @@ ipcRenderer.on('inject-session-data', (event, sessionData) => {
 
 ipcRenderer.send('request-session-data');
 
+// Funções de IndexedDB (sem alterações)
 async function exportIndexedDB() {
     try {
         const allData = {};
@@ -132,33 +129,18 @@ async function importIndexedDB(dataToImport) {
     }
 }
 
-console.log('%c[PRELOAD SCRIPT VFINAL] Todas as correções aplicadas!', 'color: #00FF00; font-size: 16px;');
 
-// =================================================================
-// ===== BARRA DE TÍTULO OTIMIZADA (VERSÃO FINAL E ROBUSTA) =====
-// =================================================================
+console.log('%c[PRELOAD SCRIPT VFINAL] Notificação Corrigida!', 'color: #00FF00; font-size: 16px;');
+
+// ===== BARRA OTIMIZADA COM PROTEÇÃO ANTI-TOOLTIP =====
 
 (() => {
-    // --- Variáveis de controle ---
     const TITLE_BAR_HEIGHT = 40;
     const CONTAINER_ID = 'secure-browser-titlebar-2025';
     let isInitialized = false;
     const downloads = new Map();
     let container = null;
     let shadowRoot = null;
-    let currentUrl = ''; // ARQUITETURA: Variável para guardar a URL mais recente
-
-    // --- Funções principais ---
-
-    // ARQUITETURA: Função dedicada para atualizar a exibição da URL na barra
-    function updateUrlDisplay() {
-        if (shadowRoot) {
-            const urlInput = shadowRoot.querySelector('.url');
-            if (urlInput) {
-                urlInput.value = currentUrl;
-            }
-        }
-    }
 
     function createTitleBar() {
         if (isInitialized || document.getElementById(CONTAINER_ID)) return;
@@ -168,10 +150,18 @@ console.log('%c[PRELOAD SCRIPT VFINAL] Todas as correções aplicadas!', 'color:
             container = document.createElement('div');
             container.id = CONTAINER_ID;
             container.setAttribute('data-secure-browser', 'true');
+             
             container.style.cssText = `
-                position: fixed; top: 0; left: 0; width: 100%; height: ${TITLE_BAR_HEIGHT}px;
-                z-index: 2147483647; pointer-events: none; isolation: isolate;
-                display: block !important; visibility: visible !important;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: ${TITLE_BAR_HEIGHT}px;
+                z-index: 2147483647;
+                pointer-events: none;
+                isolation: isolate;
+                display: block !important;
+                visibility: visible !important;
             `;
 
             shadowRoot = container.attachShadow({ mode: 'closed' });
@@ -192,7 +182,8 @@ console.log('%c[PRELOAD SCRIPT VFINAL] Todas as correções aplicadas!', 'color:
                 .downloads-menu { display: none; position: absolute; top: 100%; right: 10px; width: 330px; max-height: 450px; background: #34495e; border: 1px solid #2c3e50; border-radius: 0 0 8px 8px; box-shadow: 0 8px 20px rgba(0,0,0,0.35); overflow-y: auto; color: #ecf0f1; font-size: 13px; padding: 8px; box-sizing: border-box; }
                 .downloads-menu.open { display: block; }
                 .downloads-menu:empty::before { content: 'Nenhum download iniciado'; display: block; text-align: center; padding: 20px; color: #bdc3c7; }
-                .dl-item { padding: 10px; border-bottom: 1px solid #2c3e50; } .dl-item:last-child { border-bottom: none; }
+                .dl-item { padding: 10px; border-bottom: 1px solid #2c3e50; }
+                .dl-item:last-child { border-bottom: none; }
                 .dl-info { display: flex; justify-content: space-between; margin-bottom: 6px; }
                 .dl-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
                 .dl-progress { height: 5px; background: rgba(0,0,0,0.3); border-radius: 3px; overflow: hidden; }
@@ -201,8 +192,27 @@ console.log('%c[PRELOAD SCRIPT VFINAL] Todas as correções aplicadas!', 'color:
                 .dl-actions { margin-top: 8px; display: flex; gap: 15px; font-size: 12px; }
                 .dl-action { color: #3498db; cursor: pointer; text-decoration: none; }
                 .dl-action:hover { color: #5dade2; text-decoration: underline; }
-                .notification-popup { position: fixed; bottom: 20px; right: -400px; background-color: #2c3e50; color: #ecf0f1; padding: 12px 20px; border-radius: 6px; border-left: 4px solid #3498db; box-shadow: 0 5px 15px rgba(0,0,0,0.3); z-index: 2147483647; font: 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; transition: right 0.5s cubic-bezier(0.68, -0.55, 0.27, 1.55); pointer-events: none; }
-                .notification-popup.visible { right: 20px; }
+
+                /* >>> INÍCIO DA CORREÇÃO DA NOTIFICAÇÃO <<< */
+                .notification-popup {
+                    position: fixed;
+                    bottom: 20px;
+                    right: -400px; /* Posição inicial fora da tela */
+                    background-color: #2c3e50;
+                    color: #ecf0f1;
+                    padding: 12px 20px;
+                    border-radius: 6px;
+                    border-left: 4px solid #3498db;
+                    box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+                    z-index: 2147483647;
+                    font: 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                    transition: right 0.5s cubic-bezier(0.68, -0.55, 0.27, 1.55);
+                    pointer-events: none;
+                }
+                .notification-popup.visible {
+                    right: 20px; /* Posição final na tela */
+                }
+                /* >>> FIM DA CORREÇÃO DA NOTIFICAÇÃO <<< */
             `;
             shadowRoot.appendChild(style);
 
@@ -216,14 +226,14 @@ console.log('%c[PRELOAD SCRIPT VFINAL] Todas as correções aplicadas!', 'color:
             `;
             shadowRoot.appendChild(bar);
 
-            // FIX: Anexar ao documentElement para evitar que frameworks (React, etc.) limpem a barra
-            document.documentElement.appendChild(container);
+            if (document.body) document.body.appendChild(container);
+            else document.documentElement.appendChild(container);
 
-            updateUrlDisplay(); // ARQUITETURA: Garante que a URL seja exibida assim que a barra for criada
-            
             applyLayoutAdjustment();
             setupAntiTooltipProtection();
             setupEvents();
+            setupIpcListeners();
+            ipcRenderer.send('request-initial-url');
             setupDomMonitoring();
 
         } catch (error) {
@@ -231,44 +241,25 @@ console.log('%c[PRELOAD SCRIPT VFINAL] Todas as correções aplicadas!', 'color:
         }
     }
 
-    function setupIpcListeners() {
-        ipcRenderer.on('url-updated', (event, url) => {
-            // ARQUITETURA: Apenas guarda a URL e chama a função de atualização
-            currentUrl = url;
-            updateUrlDisplay();
-        });
-
-        ipcRenderer.on('download-started', (event, { id, filename }) => {
-            downloads.set(id, { filename, progress: 0, state: 'active' });
-            updateDownloadsUI();
-            showNotification(`Download iniciado: ${filename}`);
-        });
-        ipcRenderer.on('download-progress', (event, { id, progress }) => {
-            const download = downloads.get(id);
-            if (download?.state === 'active') { download.progress = progress; updateDownloadsUI(); }
-        });
-        ipcRenderer.on('download-complete', (event, { id, state, path }) => {
-            const download = downloads.get(id);
-            if (download) {
-                download.state = state;
-                download.path = path;
-                download.progress = (state === 'completed') ? 100 : download.progress;
-                updateDownloadsUI();
-            }
-        });
-    }
-
-    // --- Funções Auxiliares (sem grandes alterações) ---
-
+    // ========== FUNÇÃO DE NOTIFICAÇÃO CORRIGIDA ==========
     function showNotification(text) {
+        // A notificação agora é criada e anexada dentro do Shadow DOM para evitar CSP
         if (!shadowRoot) return;
+
         const notif = document.createElement('div');
         notif.className = 'notification-popup';
         notif.textContent = text;
+        
         shadowRoot.appendChild(notif);
-        requestAnimationFrame(() => notif.classList.add('visible'));
+
+        // Usa classes para controlar a animação, em vez de estilos inline
+        requestAnimationFrame(() => {
+            notif.classList.add('visible');
+        });
+
         setTimeout(() => {
             notif.classList.remove('visible');
+            // Espera a animação de saída terminar antes de remover o elemento
             setTimeout(() => {
                 if (notif.parentNode === shadowRoot) {
                    shadowRoot.removeChild(notif);
@@ -277,39 +268,28 @@ console.log('%c[PRELOAD SCRIPT VFINAL] Todas as correções aplicadas!', 'color:
         }, 4000);
     }
 
-    // ✅ NOVA VERSÃO FINAL (USAR ESTA)
-	function applyLayoutAdjustment() {
-    let styleEl = document.getElementById('secure-browser-layout-adjust');
-    if (!styleEl) {
-        styleEl = document.createElement('style');
-        styleEl.id = 'secure-browser-layout-adjust';
-        (document.head || document.documentElement).appendChild(styleEl);
+    // Funções de layout, monitoramento e eventos (sem alterações)
+    function setupAntiTooltipProtection() {
+        const isEnvatoElements = window.location.hostname.includes('envato.com');
+        if (isEnvatoElements) {
+            console.log(`[SECURE BROWSER] Envato detectado - Proteção invasiva desativada.`);
+            return;
+        }
+        const antiTooltipStyle = document.createElement('style');
+        antiTooltipStyle.id = 'secure-browser-anti-tooltip';
+        antiTooltipStyle.textContent = `[role="tooltip"], .tooltip, .ui-tooltip, [data-tooltip] { display: none !important; visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; }`;
+        (document.head || document.documentElement).appendChild(antiTooltipStyle);
     }
-    
-    // Esta é a correção final de layout que resolve a barra de rolagem.
-    styleEl.textContent = `
-        :root {
-            --secure-browser-titlebar-height: ${TITLE_BAR_HEIGHT}px;
+
+    function applyLayoutAdjustment() {
+        let styleEl = document.getElementById('secure-browser-layout-adjust');
+        if (!styleEl) {
+            styleEl = document.createElement('style');
+            styleEl.id = 'secure-browser-layout-adjust';
+            (document.head || document.documentElement).appendChild(styleEl);
         }
-
-        html {
-            /* Impede a barra de rolagem no elemento raiz para que a nossa barra não a cubra. */
-            overflow: hidden !important;
-        }
-
-        body {
-            /* Transforma o body no container de rolagem principal. */
-            overflow-y: auto !important;
-            height: 100vh !important;
-
-            /* Mantém nosso ajuste para a barra de título. */
-            padding-top: var(--secure-browser-titlebar-height) !important;
-
-            /* Essencial para que o padding não aumente a altura total de 100vh. */
-            box-sizing: border-box !important;
-        }
-    `;
-	}
+        styleEl.textContent = `:root { --secure-browser-titlebar-height: ${TITLE_BAR_HEIGHT}px; } html { position: relative !important; top: var(--secure-browser-titlebar-height) !important; height: calc(100vh - var(--secure-browser-titlebar-height)) !important; overflow-y: auto !important; } body { min-height: 100% !important; height: auto !important; }`;
+    }
 
     function adjustFixedHeaders() {
         const elements = document.querySelectorAll('body *');
@@ -327,8 +307,9 @@ console.log('%c[PRELOAD SCRIPT VFINAL] Todas as correções aplicadas!', 'color:
 
     function setupDomMonitoring() {
         const observer = new MutationObserver(() => {
-            if (!document.getElementById(CONTAINER_ID)) { isInitialized = false; initialize(); }
+            if (!document.getElementById(CONTAINER_ID)) { isInitialized = false; createTitleBar(); }
             if (!document.getElementById('secure-browser-layout-adjust')) applyLayoutAdjustment();
+            if (!document.getElementById('secure-browser-anti-tooltip')) setupAntiTooltipProtection();
             adjustFixedHeaders();
         });
         observer.observe(document.documentElement, { childList: true, subtree: true });
@@ -346,6 +327,7 @@ console.log('%c[PRELOAD SCRIPT VFINAL] Todas as correções aplicadas!', 'color:
                 case 'forward': ipcRenderer.send('navigate-forward'); break;
                 case 'reload': ipcRenderer.send('navigate-reload'); break;
                 case 'downloads': shadowRoot.querySelector('.downloads-menu').classList.toggle('open'); break;
+                case 'export': exportSession(); break;
                 case 'minimize': ipcRenderer.send('minimize-secure-window'); break;
                 case 'maximize': ipcRenderer.send('maximize-secure-window'); break;
                 case 'close': ipcRenderer.send('close-secure-window'); break;
@@ -361,6 +343,30 @@ console.log('%c[PRELOAD SCRIPT VFINAL] Todas as correções aplicadas!', 'color:
         window.addEventListener('offline', updateStatus);
     }
     
+    async function exportSession() {
+        const getStorage = (s) => { let o = {}; for (let i = 0; i < s.length; i++) { const k = s.key(i); if(k) o[k] = s.getItem(k); } return o; };
+        ipcRenderer.send('initiate-full-session-export', { localStorageData: getStorage(window.localStorage), sessionStorageData: getStorage(window.sessionStorage), indexedDBData: await exportIndexedDB() });
+    }
+    
+    function setupIpcListeners() {
+        ipcRenderer.on('url-updated', (event, url) => {
+            if (shadowRoot) { const urlInput = shadowRoot.querySelector('.url'); if (urlInput) urlInput.value = url; }
+        });
+        ipcRenderer.on('download-started', (event, { id, filename }) => {
+            downloads.set(id, { filename, progress: 0, state: 'active' });
+            updateDownloadsUI();
+            showNotification(`Download iniciado: ${filename}`); // A chamada continua a mesma
+        });
+        ipcRenderer.on('download-progress', (event, { id, progress }) => {
+            const download = downloads.get(id);
+            if (download?.state === 'active') { download.progress = progress; updateDownloadsUI(); }
+        });
+        ipcRenderer.on('download-complete', (event, { id, state, path }) => {
+            const download = downloads.get(id);
+            if (download) { download.state = state; download.path = path; download.progress = (state === 'completed') ? 100 : download.progress; updateDownloadsUI(); }
+        });
+    }
+
     function updateDownloadsUI() {
         if (!shadowRoot) return;
         const menu = shadowRoot.querySelector('.downloads-menu');
@@ -385,38 +391,10 @@ console.log('%c[PRELOAD SCRIPT VFINAL] Todas as correções aplicadas!', 'color:
             menu.appendChild(item);
         });
     }
-
-    function setupAntiTooltipProtection() {
-        const isEnvatoElements = window.location.hostname.includes('envato.com');
-        if (isEnvatoElements) {
-            console.log(`[SECURE BROWSER] Envato detectado - Proteção invasiva de tooltip desativada.`);
-            return;
-        }
-        if(document.getElementById('secure-browser-anti-tooltip')) return;
-        const antiTooltipStyle = document.createElement('style');
-        antiTooltipStyle.id = 'secure-browser-anti-tooltip';
-        antiTooltipStyle.textContent = `[role="tooltip"], .tooltip, .ui-tooltip, [data-tooltip] { display: none !important; visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; }`;
-        (document.head || document.documentElement).appendChild(antiTooltipStyle);
-    }
     
-    // --- Lógica de Inicialização ---
-
-    function initialize() {
-        // FIX: Usa requestAnimationFrame para evitar "pisca-pisca"
-        requestAnimationFrame(() => {
-            if (isInitialized || document.getElementById(CONTAINER_ID)) return;
-            createTitleBar();
-            applyLayoutAdjustment();
-        });
+    if (document.readyState === 'interactive' || document.readyState === 'complete') {
+        createTitleBar();
+    } else {
+        document.addEventListener('DOMContentLoaded', createTitleBar, { once: true });
     }
-
-    // ARQUITETURA: Configura listeners imediatamente
-    setupIpcListeners();
-    ipcRenderer.send('request-initial-url');
-
-    // ARQUITETURA: Tenta inicializar em múltiplos estágios para máxima compatibilidade
-    initialize();
-    document.addEventListener('DOMContentLoaded', initialize, { once: true });
-    window.addEventListener('load', initialize, { once: true });
-
 })();
