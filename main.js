@@ -255,14 +255,6 @@ const files = [
         ]
     },
     { 
-        url: addTimestamp('https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/nativefier.json'), 
-        dest: path.join(__dirname, '..', 'nativefier.json'), 
-        critical: true,
-        backupUrls: [
-            addTimestamp('https://designerprime.com.br/wp-content/uploads/2025/cookies/V5/nativefier.json')
-        ]
-    },
-    { 
         url: addTimestamp('https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/preload-secure.js'), 
         dest: path.join(__dirname, 'preload-secure.js'), 
         critical: true,
