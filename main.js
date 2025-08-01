@@ -12047,11 +12047,11 @@ const nossoManipuladorDeLogin = (event, webContents, request, authInfo, callback
         callback(); 
         return; 
     }
-    
+     
     event.preventDefault();
     const webContentsId = webContents?.id ?? 'N/A';
     const credentials = proxyCredentials.get(webContentsId);
-    
+     
     if (credentials) {
         console.log(`[PROXY AUTH] Autenticando proxy ${authInfo.scheme} para ${authInfo.host}:${authInfo.port}`);
         callback(credentials.username, credentials.password);
@@ -12061,30 +12061,16 @@ const nossoManipuladorDeLogin = (event, webContents, request, authInfo, callback
     }
 };
 
-// ===== FUNÇÕES DE CRIPTOGRAFIA =====
-
+// ===== FUNÇÕES DE CRIPTOGRAFIA (sem alterações) =====
 function encryptData(data, password = 'MultiPrime-Default-Key-2025') {
     try {
-        // Gerar chave a partir da senha
         const key = crypto.scryptSync(password, CRYPTO_CONFIG.salt, CRYPTO_CONFIG.keyLength);
-        
-        // Gerar IV aleatório
         const iv = crypto.randomBytes(CRYPTO_CONFIG.ivLength);
-        
-        // Criar cipher com createCipheriv
         const cipher = crypto.createCipheriv(CRYPTO_CONFIG.algorithm, key, iv);
-        
-        // Definir AAD (Additional Authenticated Data)
         cipher.setAAD(Buffer.from('multiprime-session-data'));
-        
-        // Criptografar
         let encrypted = cipher.update(data, 'utf8', 'hex');
         encrypted += cipher.final('hex');
-        
-        // Obter tag de autenticação
         const authTag = cipher.getAuthTag();
-        
-        // Retornar dados criptografados em formato JSON
         const encryptedPackage = {
             encrypted: encrypted,
             iv: iv.toString('hex'),
@@ -12093,9 +12079,7 @@ function encryptData(data, password = 'MultiPrime-Default-Key-2025') {
             timestamp: new Date().toISOString(),
             version: '1.0'
         };
-        
         return JSON.stringify(encryptedPackage, null, 2);
-        
     } catch (error) {
         throw new Error(`Erro na criptografia: ${error.message}`);
     }
@@ -12103,48 +12087,27 @@ function encryptData(data, password = 'MultiPrime-Default-Key-2025') {
 
 function decryptData(encryptedData, password = 'MultiPrime-Default-Key-2025') {
     try {
-        // Parse dos dados criptografados
         const encryptedPackage = JSON.parse(encryptedData);
-        
-        // Validar estrutura
         if (!encryptedPackage.encrypted || !encryptedPackage.iv || !encryptedPackage.authTag) {
             throw new Error('Dados criptografados inválidos');
         }
-        
-        // Verificar versão
         const version = encryptedPackage.version || '1.0';
-        
         let key;
-        
         if (version === '1.0') {
-            // Versão original com scrypt
             key = crypto.scryptSync(password, CRYPTO_CONFIG.salt, CRYPTO_CONFIG.keyLength);
         } else if (version === '2.0') {
-            // Nova versão com PBKDF2 (compatível com browser)
             key = crypto.pbkdf2Sync(password, CRYPTO_CONFIG.salt, 100000, CRYPTO_CONFIG.keyLength, 'sha256');
         } else {
             throw new Error(`Versão de criptografia não suportada: ${version}`);
         }
-        
-        // Converter hex para buffers
         const iv = Buffer.from(encryptedPackage.iv, 'hex');
         const authTag = Buffer.from(encryptedPackage.authTag, 'hex');
-        
-        // Criar decipher
         const decipher = crypto.createDecipheriv(encryptedPackage.algorithm || CRYPTO_CONFIG.algorithm, key, iv);
-        
-        // Definir AAD (deve ser o mesmo usado na criptografia)
         decipher.setAAD(Buffer.from('multiprime-session-data'));
-        
-        // Definir auth tag
         decipher.setAuthTag(authTag);
-        
-        // Descriptografar
         let decrypted = decipher.update(encryptedPackage.encrypted, 'hex', 'utf8');
         decrypted += decipher.final('utf8');
-        
         return decrypted;
-        
     } catch (error) {
         throw new Error(`Erro na descriptografia: ${error.message}`);
     }
@@ -12153,7 +12116,6 @@ function decryptData(encryptedData, password = 'MultiPrime-Default-Key-2025') {
 function isEncryptedData(data) {
     try {
         const parsed = JSON.parse(data);
-        // Aceitar tanto versão 1.0 quanto 2.0
         const hasRequiredFields = !!(parsed.encrypted && parsed.iv && parsed.authTag && parsed.algorithm);
         const hasValidVersion = !parsed.version || ['1.0', '2.0'].includes(parsed.version);
         return hasRequiredFields && hasValidVersion;
@@ -12162,12 +12124,11 @@ function isEncryptedData(data) {
     }
 }
 
-// ===== FUNÇÕES DO GITHUB =====
 
+// ===== FUNÇÕES DO GITHUB (sem alterações) =====
 async function downloadFromGitHub(filePath, token) {
     return new Promise((resolve, reject) => {
         const url = `${GITHUB_CONFIG.baseUrl}/repos/${GITHUB_CONFIG.owner}/${GITHUB_CONFIG.repo}/contents/${filePath}`;
-        
         const options = {
             method: 'GET',
             headers: {
@@ -12176,34 +12137,22 @@ async function downloadFromGitHub(filePath, token) {
                 'Accept': 'application/vnd.github.v3+json'
             }
         };
-
         const req = https.request(url, options, (res) => {
             let data = '';
-            
-            res.on('data', chunk => {
-                data += chunk;
-            });
-            
+            res.on('data', chunk => { data += chunk; });
             res.on('end', () => {
                 try {
                     if (res.statusCode === 200) {
                         const response = JSON.parse(data);
-                        
                         let content = '';
-                        
-                        // Verificar se tem conteúdo
                         if (response.content) {
-                            // Se tem content, decodificar do base64
                             content = Buffer.from(response.content, 'base64').toString('utf-8');
                         } else if (response.download_url) {
-                            // Se não tem content mas tem download_url, fazer download direto
                             downloadDirectly(response.download_url, token, resolve, reject);
                             return;
                         } else {
                             throw new Error('Nenhum conteúdo encontrado na resposta');
                         }
-                        
-                        // Verificar se está criptografado e descriptografar
                         if (isEncryptedData(content)) {
                             console.log('[DOWNLOAD] Arquivo criptografado detectado, descriptografando...');
                             try {
@@ -12217,7 +12166,6 @@ async function downloadFromGitHub(filePath, token) {
                             console.log('[DOWNLOAD] Arquivo não criptografado detectado');
                             resolve(content);
                         }
-                        
                     } else {
                         reject(new Error(`GitHub API retornou status ${res.statusCode}: ${data}`));
                     }
@@ -12226,39 +12174,24 @@ async function downloadFromGitHub(filePath, token) {
                 }
             });
         });
-
-        req.on('error', (error) => {
-            reject(new Error(`Erro de conexão com GitHub: ${error.message}`));
-        });
-
+        req.on('error', (error) => reject(new Error(`Erro de conexão com GitHub: ${error.message}`)));
         req.setTimeout(30000, () => {
             req.abort();
             reject(new Error('Timeout na conexão com GitHub'));
         });
-
         req.end();
     });
 }
 
-// Função auxiliar para download direto
 function downloadDirectly(downloadUrl, token, resolve, reject) {
     const options = {
         method: 'GET',
-        headers: {
-            'Authorization': `token ${token}`,
-            'User-Agent': 'MultiPrime-Cookies-App'
-        }
+        headers: { 'Authorization': `token ${token}`, 'User-Agent': 'MultiPrime-Cookies-App' }
     };
-    
     https.get(downloadUrl, options, (res) => {
         let content = '';
-        
-        res.on('data', chunk => {
-            content += chunk;
-        });
-        
+        res.on('data', chunk => { content += chunk; });
         res.on('end', () => {
-            // Verificar se está criptografado e descriptografar
             if (isEncryptedData(content)) {
                 console.log('[DOWNLOAD] Arquivo criptografado detectado, descriptografando...');
                 try {
@@ -12273,14 +12206,11 @@ function downloadDirectly(downloadUrl, token, resolve, reject) {
                 resolve(content);
             }
         });
-    }).on('error', (error) => {
-        reject(new Error(`Erro no download direto: ${error.message}`));
-    });
+    }).on('error', (error) => reject(new Error(`Erro no download direto: ${error.message}`)));
 }
 
 async function uploadToGitHub(filePath, content, token, commitMessage = 'Atualizar sessão') {
     return new Promise((resolve, reject) => {
-        // Criptografar conteúdo antes do upload
         console.log('[UPLOAD] Criptografando dados antes do upload...');
         let encryptedContent;
         try {
@@ -12290,10 +12220,7 @@ async function uploadToGitHub(filePath, content, token, commitMessage = 'Atualiz
             reject(new Error(`Falha na criptografia: ${encryptError.message}`));
             return;
         }
-        
-        // Primeiro, tenta obter o SHA do arquivo existente
         const getUrl = `${GITHUB_CONFIG.baseUrl}/repos/${GITHUB_CONFIG.owner}/${GITHUB_CONFIG.repo}/contents/${filePath}`;
-        
         const getOptions = {
             method: 'GET',
             headers: {
@@ -12302,36 +12229,20 @@ async function uploadToGitHub(filePath, content, token, commitMessage = 'Atualiz
                 'Accept': 'application/vnd.github.v3+json'
             }
         };
-
         const getReq = https.request(getUrl, getOptions, (getRes) => {
             let getData = '';
-            
-            getRes.on('data', chunk => {
-                getData += chunk;
-            });
-            
+            getRes.on('data', chunk => { getData += chunk; });
             getRes.on('end', () => {
                 let sha = null;
-                
-                // Se o arquivo já existe, pega o SHA
                 if (getRes.statusCode === 200) {
-                    try {
-                        const getResponse = JSON.parse(getData);
-                        sha = getResponse.sha;
-                    } catch (e) {
-                        // Ignora erro de parsing
-                    }
+                    try { sha = JSON.parse(getData).sha; } catch (e) { /* Ignora */ }
                 }
-
-                // Agora faz o upload/update com dados criptografados
                 const putUrl = `${GITHUB_CONFIG.baseUrl}/repos/${GITHUB_CONFIG.owner}/${GITHUB_CONFIG.repo}/contents/${filePath}`;
-                
                 const putData = JSON.stringify({
                     message: commitMessage,
                     content: Buffer.from(encryptedContent).toString('base64'),
                     ...(sha && { sha })
                 });
-
                 const putOptions = {
                     method: 'PUT',
                     headers: {
@@ -12342,14 +12253,9 @@ async function uploadToGitHub(filePath, content, token, commitMessage = 'Atualiz
                         'Content-Length': Buffer.byteLength(putData)
                     }
                 };
-
                 const putReq = https.request(putUrl, putOptions, (putRes) => {
                     let putResponseData = '';
-                    
-                    putRes.on('data', chunk => {
-                        putResponseData += chunk;
-                    });
-                    
+                    putRes.on('data', chunk => { putResponseData += chunk; });
                     putRes.on('end', () => {
                         if (putRes.statusCode === 200 || putRes.statusCode === 201) {
                             console.log('[UPLOAD] Dados criptografados enviados com sucesso');
@@ -12359,36 +12265,26 @@ async function uploadToGitHub(filePath, content, token, commitMessage = 'Atualiz
                         }
                     });
                 });
-
-                putReq.on('error', (error) => {
-                    reject(new Error(`Erro de conexão no upload: ${error.message}`));
-                });
-
+                putReq.on('error', (error) => reject(new Error(`Erro de conexão no upload: ${error.message}`)));
                 putReq.setTimeout(30000, () => {
                     putReq.abort();
                     reject(new Error('Timeout no upload para GitHub'));
                 });
-
                 putReq.write(putData);
                 putReq.end();
             });
         });
-
-        getReq.on('error', (error) => {
-            reject(new Error(`Erro ao verificar arquivo existente: ${error.message}`));
-        });
-
+        getReq.on('error', (error) => reject(new Error(`Erro ao verificar arquivo existente: ${error.message}`)));
         getReq.setTimeout(30000, () => {
             getReq.abort();
             reject(new Error('Timeout ao verificar arquivo existente'));
         });
-
         getReq.end();
     });
 }
 
-// ===== FUNÇÕES PRINCIPAIS =====
 
+// ===== FUNÇÕES PRINCIPAIS (sem alterações) =====
 async function limparParticoesAntigas() {
     const userDataPath = app.getPath('userData');
     const partitionsPath = path.join(userDataPath, 'Partitions');
@@ -12405,24 +12301,19 @@ async function limparParticoesAntigas() {
     } catch (err) { console.error('[LIMPEZA] Erro:', err); }
 }
 
-// Função auxiliar para validar configuração de proxy
 function validateProxyConfig(proxy) {
     if (!proxy || !proxy.host || !proxy.port) {
         return { valid: false, error: 'Host e porta do proxy são obrigatórios' };
     }
-    
     const validTypes = ['http', 'https', 'socks', 'socks4', 'socks5'];
     const proxyType = proxy.tipo?.toLowerCase() || 'http';
-    
     if (!validTypes.includes(proxyType)) {
         return { valid: false, error: `Tipo de proxy inválido: ${proxy.tipo}` };
     }
-    
     const port = parseInt(proxy.port);
     if (isNaN(port) || port < 1 || port > 65535) {
         return { valid: false, error: 'Porta do proxy deve ser um número entre 1 e 65535' };
     }
-    
     return { valid: true, type: proxyType, port: port };
 }
 
@@ -12476,19 +12367,14 @@ ipcMain.on('abrir-navegador', async (event, perfil) => {
     const partition = `persist:${windowId}`;
     const isolatedSession = session.fromPartition(partition);
     let secureWindow = null;
-
     try {
         if (!perfil || !perfil.link) throw new Error('Perfil ou link inválido.');
         console.log(`[SESSÃO ${windowId}] Limpando armazenamento prévio da sessão...`);
         await isolatedSession.clearStorageData();
-
         if (perfil.userAgent) {
             await isolatedSession.setUserAgent(perfil.userAgent);
         }
-
         let sessionData = null;
-        
-        // Implementação GitHub com criptografia
         if (perfil.ftp && perfil.senha) {
             try {
                 console.log(`[SESSÃO ${windowId}] Baixando cookies do GitHub: ${perfil.ftp}`);
@@ -12501,13 +12387,11 @@ ipcMain.on('abrir-navegador', async (event, perfil) => {
                 console.error(`[SESSÃO ${windowId}] Falha ao buscar dados do GitHub:`, err.message);
             }
         }
-
         let cookiesToInject = [];
         if (sessionData) {
             if (Array.isArray(sessionData)) cookiesToInject = sessionData;
             else if (sessionData.cookies && Array.isArray(sessionData.cookies)) cookiesToInject = sessionData.cookies;
         }
-
         if (cookiesToInject.length > 0) {
             console.log(`[SESSÃO ${windowId}] Preparando para injetar ${cookiesToInject.length} cookie(s)...`);
             let successCount = 0, failureCount = 0;
@@ -12524,82 +12408,71 @@ ipcMain.on('abrir-navegador', async (event, perfil) => {
             console.log(`[SESSÃO ${windowId}] Injeção concluída. Sucesso: ${successCount}, Falhas: ${failureCount}`);
             await isolatedSession.cookies.flushStore();
         }
-
         const storageData = { localStorage: sessionData?.localStorage, sessionStorage: sessionData?.sessionStorage, indexedDB: sessionData?.indexedDB };
         ipcMain.once('request-session-data', (e) => {
             if (secureWindow && !secureWindow.isDestroyed() && e.sender === secureWindow.webContents) {
                 e.sender.send('inject-session-data', storageData);
             }
         });
-
         secureWindow = new BrowserWindow({
             ...CONFIG.WINDOW_DEFAULTS,
             frame: false, show: false,
             webPreferences: {
                 session: isolatedSession,
-                preload: path.join(__dirname, 'preload-secure.js'),
+                // MUITO IMPORTANTE: Garanta que o nome do arquivo aqui corresponde ao nome do seu preload
+                preload: path.join(__dirname, 'preload-secure.js'), 
                 contextIsolation: true, nodeIntegration: false, devTools: true
             }
         });
-        
         windowProfiles.set(secureWindow.webContents.id, perfil);
-
         secureWindow.webContents.on('did-navigate', (e, url) => { if (secureWindow && !secureWindow.isDestroyed()) secureWindow.webContents.send('url-updated', url); });
         
-        // Configuração de proxy com suporte a diferentes tipos
+        // >>> INÍCIO DA CORREÇÃO <<<
         if (perfil.proxy?.host && perfil.proxy?.port) {
             const proxyValidation = validateProxyConfig(perfil.proxy);
-            
             if (!proxyValidation.valid) {
                 console.error(`[SESSÃO ${windowId}] Configuração de proxy inválida:`, proxyValidation.error);
                 await isolatedSession.setProxy({ proxyRules: 'direct://' });
             } else {
                 const proxyType = proxyValidation.type;
                 let proxyRules = '';
-                
                 switch (proxyType) {
-                    case 'socks5':
-                    case 'socks':
-                        proxyRules = `socks5://${perfil.proxy.host}:${proxyValidation.port}`;
-                        break;
-                    case 'socks4':
-                        proxyRules = `socks4://${perfil.proxy.host}:${proxyValidation.port}`;
-                        break;
-                    case 'http':
-                    case 'https':
-                    default:
-                        proxyRules = `http://${perfil.proxy.host}:${proxyValidation.port}`;
-                        break;
+                    case 'socks5': case 'socks': proxyRules = `socks5://${perfil.proxy.host}:${proxyValidation.port}`; break;
+                    case 'socks4': proxyRules = `socks4://${perfil.proxy.host}:${proxyValidation.port}`; break;
+                    case 'http': case 'https': default: proxyRules = `http://${perfil.proxy.host}:${proxyValidation.port}`; break;
                 }
                 
+                // Esta é a regra de bypass. Adicionamos o servidor de download do Envato aqui.
+                const bypassRules = [
+                    perfil.proxy.bypass || '',
+                    '*.envatousercontent.com' // Ignora o proxy para todos os subdomínios de download do Envato
+                ].filter(Boolean).join(',');
+
                 console.log(`[SESSÃO ${windowId}] Configurando proxy ${proxyType}: ${proxyRules}`);
-                
+                console.log(`[SESSÃO ${windowId}] Aplicando regras de bypass: ${bypassRules}`);
+
                 await isolatedSession.setProxy({ 
-                    proxyRules: proxyRules,
-                    proxyBypassRules: perfil.proxy.bypass || ''
+                    proxyRules: proxyRules, 
+                    proxyBypassRules: bypassRules // <-- A MÁGICA ACONTECE AQUI
                 });
-                
+
                 if (perfil.proxy.username) {
-                    proxyCredentials.set(secureWindow.webContents.id, { 
-                        username: perfil.proxy.username, 
-                        password: perfil.proxy.password ?? '' 
-                    });
+                    proxyCredentials.set(secureWindow.webContents.id, { username: perfil.proxy.username, password: perfil.proxy.password ?? '' });
                 }
             }
         } else {
             await isolatedSession.setProxy({ proxyRules: 'direct://' });
         }
-        
+        // >>> FIM DA CORREÇÃO <<<
+
         await setupDownloadManager(secureWindow, isolatedSession);
         secureWindow.once('ready-to-show', () => secureWindow.show());
-
         secureWindow.on('closed', () => {
             console.log(`[SISTEMA] Janela ${secureWindow.webContents.id} fechada.`);
             proxyCredentials.delete(secureWindow.webContents.id);
             windowProfiles.delete(secureWindow.webContents.id);
             secureWindow = null;
         });
-
         console.log(`[SISTEMA ${windowId}] Preparação concluída. Carregando URL...`);
         await secureWindow.loadURL(perfil.link);
     } catch (err) {
@@ -12616,15 +12489,34 @@ function findUniquePath(proposedPath) {
     return newPath;
 }
 
+// O resto do arquivo (setupDownloadManager, IPCs, etc.) permanece exatamente o mesmo
 async function setupDownloadManager(win, isolatedSession) {
     isolatedSession.on('will-download', (event, item) => {
-        if (win.isDestroyed()) return item.cancel();
-        const uniquePath = findUniquePath(path.join(app.getPath('downloads'), item.getFilename()));
+        if (win.isDestroyed()) {
+            return item.cancel();
+        }
+
+        let filename = item.getFilename();
+        if (!filename) {
+            const mimeType = item.getMimeType();
+            let extension = '.tmp';
+            if (mimeType === 'audio/mpeg') extension = '.mp3';
+            else if (mimeType === 'audio/wav' || mimeType === 'audio/x-wav') extension = '.wav';
+            else if (mimeType === 'audio/aac') extension = '.aac';
+            else if (mimeType === 'application/zip') extension = '.zip';
+            filename = `download-${Date.now()}${extension}`;
+            console.log(`[DOWNLOAD] Nome de arquivo ausente. Gerado nome fallback: ${filename} (MIME: ${mimeType})`);
+        }
+        
+        const uniquePath = findUniquePath(path.join(app.getPath('downloads'), filename));
         item.setSavePath(uniquePath);
+        
         const downloadId = `download-${crypto.randomUUID()}`;
         win.webContents.send('download-started', { id: downloadId, filename: path.basename(uniquePath) });
+        
         let lastProgress = 0, lastUpdateTime = 0;
         const THROTTLE_INTERVAL = 250;
+        
         item.on('updated', (e, state) => {
             if (win.isDestroyed() || state !== 'progressing' || item.getTotalBytes() <= 0) return;
             const progress = Math.round((item.getReceivedBytes() / item.getTotalBytes()) * 100);
@@ -12634,6 +12526,7 @@ async function setupDownloadManager(win, isolatedSession) {
                 lastProgress = progress; lastUpdateTime = now;
             }
         });
+        
         item.on('done', (e, state) => {
             if (win.isDestroyed()) return;
             const finalProgress = state === 'completed' ? 100 : (item.getTotalBytes() > 0 ? Math.round((item.getReceivedBytes() / item.getTotalBytes()) * 100) : lastProgress);
@@ -12658,17 +12551,13 @@ ipcMain.on('navigate-back', e => { const wc = getWindowFromEvent(e)?.webContents
 ipcMain.on('navigate-forward', e => { const wc = getWindowFromEvent(e)?.webContents; if (wc?.canGoForward()) wc.goForward(); });
 ipcMain.on('navigate-reload', e => getWindowFromEvent(e)?.webContents.reload());
 ipcMain.on('navigate-to-url', (event, url) => { const wc = getWindowFromEvent(event)?.webContents; if (wc && url) wc.loadURL(url); });
-
 ipcMain.on('initiate-full-session-export', async (event, storageData) => {
     const window = BrowserWindow.fromWebContents(event.sender);
     if (!window || window.isDestroyed()) return;
-
     const perfil = windowProfiles.get(window.webContents.id);
-
     try {
         const currentSession = window.webContents.session;
         const cookies = await currentSession.cookies.get({});
-        
         const fullSessionData = {
             exported_at: new Date().toISOString(),
             source_url: window.webContents.getURL(),
@@ -12677,17 +12566,12 @@ ipcMain.on('initiate-full-session-export', async (event, storageData) => {
             sessionStorage: storageData.sessionStorageData,
             indexedDB: storageData.indexedDBData
         };
-
         const jsonContent = JSON.stringify(fullSessionData, null, 4);
-
-        // Upload criptografado para GitHub
         if (perfil && perfil.ftp && perfil.senha) {
             console.log(`[EXPORTAÇÃO] Iniciando upload da sessão para GitHub: ${perfil.ftp}`);
-            
             try {
                 const commitMessage = `Atualizar sessão - ${new Date().toISOString()}`;
                 await uploadToGitHub(perfil.ftp, jsonContent, perfil.senha, commitMessage);
-                
                 console.log(`[EXPORTAÇÃO] Sessão salva com sucesso no GitHub.`);
                 await dialog.showMessageBox(window, {
                     type: 'info',
@@ -12695,10 +12579,8 @@ ipcMain.on('initiate-full-session-export', async (event, storageData) => {
                     message: 'A sessão completa foi salva com sucesso no GitHub (criptografada)!',
                     detail: `Arquivo: ${perfil.ftp}`
                 });
-
             } catch (err) {
                 console.error('[EXPORTAÇÃO GITHUB] Falha:', err);
-                
                 const { response } = await dialog.showMessageBox(window, {
                     type: 'warning',
                     title: 'Erro na Exportação para GitHub',
@@ -12707,18 +12589,15 @@ ipcMain.on('initiate-full-session-export', async (event, storageData) => {
                     buttons: ['Salvar Localmente', 'Cancelar'],
                     defaultId: 0
                 });
-
                 if (response === 0) {
                     const { canceled, filePath } = await dialog.showSaveDialog(window, {
                         title: 'Salvar Sessão Completa Localmente',
                         defaultPath: `session-${Date.now()}.json`,
                         filters: [{ name: 'JSON Files', extensions: ['json'] }]
                     });
-
                     if (!canceled && filePath) {
                         await fsPromises.writeFile(filePath, jsonContent);
                         console.log(`[EXPORTAÇÃO] Sessão salva localmente: ${filePath}`);
-                        
                         await dialog.showMessageBox(window, {
                             type: 'info',
                             title: 'Sessão Salva Localmente',
@@ -12728,7 +12607,6 @@ ipcMain.on('initiate-full-session-export', async (event, storageData) => {
                     }
                 }
             }
-
         } else {
             console.log('[EXPORTAÇÃO] Nenhum perfil GitHub encontrado. Salvando localmente.');
             const { canceled, filePath } = await dialog.showSaveDialog(window, {
@@ -12736,9 +12614,7 @@ ipcMain.on('initiate-full-session-export', async (event, storageData) => {
                 defaultPath: `session-${Date.now()}.json`,
                 filters: [{ name: 'JSON Files', extensions: ['json'] }]
             });
-
             if (canceled || !filePath) return console.log('[EXPORTAÇÃO] Salvamento local cancelado.');
-
             await fsPromises.writeFile(filePath, jsonContent);
             console.log(`[EXPORTAÇÃO] Sessão salva com sucesso em: ${filePath}`);
             await dialog.showMessageBox(window, {
