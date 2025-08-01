@@ -129,7 +129,6 @@ async function importIndexedDB(dataToImport) {
     }
 }
 
-
 console.log('%c[PRELOAD SCRIPT VFINAL] Notificação Corrigida!', 'color: #00FF00; font-size: 16px;');
 
 // ===== BARRA OTIMIZADA COM PROTEÇÃO ANTI-TOOLTIP =====
@@ -150,7 +149,7 @@ console.log('%c[PRELOAD SCRIPT VFINAL] Notificação Corrigida!', 'color: #00FF0
             container = document.createElement('div');
             container.id = CONTAINER_ID;
             container.setAttribute('data-secure-browser', 'true');
-             
+            
             container.style.cssText = `
                 position: fixed;
                 top: 0;
@@ -192,8 +191,6 @@ console.log('%c[PRELOAD SCRIPT VFINAL] Notificação Corrigida!', 'color: #00FF0
                 .dl-actions { margin-top: 8px; display: flex; gap: 15px; font-size: 12px; }
                 .dl-action { color: #3498db; cursor: pointer; text-decoration: none; }
                 .dl-action:hover { color: #5dade2; text-decoration: underline; }
-
-                /* >>> INÍCIO DA CORREÇÃO DA NOTIFICAÇÃO <<< */
                 .notification-popup {
                     position: fixed;
                     bottom: 20px;
@@ -212,7 +209,6 @@ console.log('%c[PRELOAD SCRIPT VFINAL] Notificação Corrigida!', 'color: #00FF0
                 .notification-popup.visible {
                     right: 20px; /* Posição final na tela */
                 }
-                /* >>> FIM DA CORREÇÃO DA NOTIFICAÇÃO <<< */
             `;
             shadowRoot.appendChild(style);
 
@@ -230,7 +226,7 @@ console.log('%c[PRELOAD SCRIPT VFINAL] Notificação Corrigida!', 'color: #00FF0
             else document.documentElement.appendChild(container);
 
             applyLayoutAdjustment();
-            setupAntiTooltipProtection();
+            setupAntiTooltipProtection(); // A CHAMADA PERMANECE AQUI
             setupEvents();
             setupIpcListeners();
             ipcRenderer.send('request-initial-url');
@@ -241,25 +237,17 @@ console.log('%c[PRELOAD SCRIPT VFINAL] Notificação Corrigida!', 'color: #00FF0
         }
     }
 
-    // ========== FUNÇÃO DE NOTIFICAÇÃO CORRIGIDA ==========
     function showNotification(text) {
-        // A notificação agora é criada e anexada dentro do Shadow DOM para evitar CSP
         if (!shadowRoot) return;
-
         const notif = document.createElement('div');
         notif.className = 'notification-popup';
         notif.textContent = text;
-        
         shadowRoot.appendChild(notif);
-
-        // Usa classes para controlar a animação, em vez de estilos inline
         requestAnimationFrame(() => {
             notif.classList.add('visible');
         });
-
         setTimeout(() => {
             notif.classList.remove('visible');
-            // Espera a animação de saída terminar antes de remover o elemento
             setTimeout(() => {
                 if (notif.parentNode === shadowRoot) {
                    shadowRoot.removeChild(notif);
@@ -268,18 +256,42 @@ console.log('%c[PRELOAD SCRIPT VFINAL] Notificação Corrigida!', 'color: #00FF0
         }, 4000);
     }
 
-    // Funções de layout, monitoramento e eventos (sem alterações)
+    // =================================================================================
+    // >>>>>>>>>>>>>>>>>>>>> INÍCIO DA FUNÇÃO MODIFICADA <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+    // =================================================================================
+    
     function setupAntiTooltipProtection() {
-        const isEnvatoElements = window.location.hostname.includes('envato.com');
-        if (isEnvatoElements) {
-            console.log(`[SECURE BROWSER] Envato detectado - Proteção invasiva desativada.`);
-            return;
+        // Sites onde os tooltips devem ser PERMITIDOS.
+        const allowedHostnames = [
+            'canva.com',
+            'leonardo.ai',
+            'placeit.net',
+            'hailuoai.video',
+            'vectorizer.ai'
+        ];
+    
+        const currentHostname = window.location.hostname;
+        
+        // Verifica se o hostname atual está na lista de exceções.
+        const isSiteAllowed = allowedHostnames.some(hostname => currentHostname.includes(hostname));
+    
+        if (isSiteAllowed) {
+            // Se o site está na lista, exibe uma mensagem e não faz mais nada, permitindo os tooltips.
+            console.log(`[SECURE BROWSER] Tooltips liberados para o site na lista de exceções: ${currentHostname}`);
+            return; // Interrompe a função aqui.
         }
+    
+        // Se o site NÃO está na lista, aplica o bloqueio de tooltips como antes.
+        console.log(`[SECURE BROWSER] Aplicando bloqueio de tooltips para: ${currentHostname}`);
         const antiTooltipStyle = document.createElement('style');
         antiTooltipStyle.id = 'secure-browser-anti-tooltip';
         antiTooltipStyle.textContent = `[role="tooltip"], .tooltip, .ui-tooltip, [data-tooltip] { display: none !important; visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; }`;
         (document.head || document.documentElement).appendChild(antiTooltipStyle);
     }
+
+    // =================================================================================
+    // >>>>>>>>>>>>>>>>>>>>>>>> FIM DA FUNÇÃO MODIFICADA <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+    // =================================================================================
 
     function applyLayoutAdjustment() {
         let styleEl = document.getElementById('secure-browser-layout-adjust');
@@ -355,7 +367,7 @@ console.log('%c[PRELOAD SCRIPT VFINAL] Notificação Corrigida!', 'color: #00FF0
         ipcRenderer.on('download-started', (event, { id, filename }) => {
             downloads.set(id, { filename, progress: 0, state: 'active' });
             updateDownloadsUI();
-            showNotification(`Download iniciado: ${filename}`); // A chamada continua a mesma
+            showNotification(`Download iniciado: ${filename}`);
         });
         ipcRenderer.on('download-progress', (event, { id, progress }) => {
             const download = downloads.get(id);
