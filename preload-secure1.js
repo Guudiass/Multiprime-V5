@@ -226,7 +226,7 @@ console.log('%c[PRELOAD SCRIPT VFINAL] Notificação Corrigida!', 'color: #00FF0
             else document.documentElement.appendChild(container);
 
             applyLayoutAdjustment();
-            setupAntiTooltipProtection();
+            setupAntiTooltipProtection(); // A CHAMADA PERMANECE AQUI
             setupEvents();
             setupIpcListeners();
             ipcRenderer.send('request-initial-url');
@@ -255,94 +255,40 @@ console.log('%c[PRELOAD SCRIPT VFINAL] Notificação Corrigida!', 'color: #00FF0
             }, 500);
         }, 4000);
     }
+
+    // =================================================================================
+    // >>>>>>>>>>>>>>>>>>>>> INÍCIO DA FUNÇÃO MODIFICADA <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+    // =================================================================================
     
-    // =================================================================================
-    // >>>>>>>>>>>>>>>>>>>> FUNÇÃO ROBUSTA (FORÇA + VELOCIDADE) <<<<<<<<<<<<<<<<<<<<<<<<
-    // =================================================================================
-
     function setupAntiTooltipProtection() {
+        // Sites onde os tooltips devem ser PERMITIDOS.
+        const allowedHostnames = [
+            'canva.com',
+            'leonardo.ai',
+            'placeit.net',
+            'hailuoai.video',
+            'vectorizer.ai'
+        ];
+    
         const currentHostname = window.location.hostname;
-
-        // Lógica Específica para o Leonardo.ai
-        if (currentHostname.includes('leonardo.ai')) {
-            console.log('[SECURE BROWSER] Ativando modo de remoção AGRESSIVO E RÁPIDO para leonardo.ai');
-
-            // Lista de seletores "agressivos" que sabemos que funcionam para encontrar o elemento
-            const tooltipSelectors = [
-                '[role="tooltip"]',
-                '.MuiTooltip-tooltip',
-                '.MuiTooltip-popper',
-                '[class*="tooltip"]',
-                '[class*="Tooltip"]'
-            ].join(','); // Junta tudo numa string única para o `matches`
-
-            const observer = new MutationObserver((mutations) => {
-                for (const mutation of mutations) {
-                    for (const node of mutation.addedNodes) {
-                        if (node.nodeType !== Node.ELEMENT_NODE) continue;
-
-                        // Função para checar o nó atual e seus filhos de forma eficiente
-                        const findAndHide = (element) => {
-                            if (!element.matches) return; // Se não for um elemento que permita `matches`
-
-                            // ALVO 1: O TOOLTIP "Download image"
-                            // Checa se o elemento corresponde a algum dos seletores agressivos
-                            if (element.matches(tooltipSelectors)) {
-                                if (element.textContent.includes('Download image')) {
-                                    console.log('[SECURE BROWSER] Tooltip encontrado por seletor agressivo. Removendo:', element);
-                                    element.style.setProperty('display', 'none', 'important');
-                                }
-                            }
-                            
-                            // ALVO 2: O POPUP DE UPGRADE
-                            if (element.matches('[role="dialog"]')) {
-                                if (element.textContent.includes('Upgrade') || element.textContent.includes('limit')) {
-                                    console.log('[SECURE BROWSER] Popup de upgrade detectado. Removendo:', element);
-                                    element.style.setProperty('display', 'none', 'important');
-                                }
-                            }
-
-                            // Bônus: Também checa se algum filho do nó adicionado é o tooltip
-                            // Isso cobre casos onde o tooltip é inserido dentro de um container
-                            const childTooltips = element.querySelectorAll(tooltipSelectors);
-                            for(const child of childTooltips) {
-                                if (child.textContent.includes('Download image')) {
-                                    console.log('[SECURE BROWSER] Tooltip-filho encontrado. Removendo:', child);
-                                    child.style.setProperty('display', 'none', 'important');
-                                }
-                            }
-                        };
-
-                        findAndHide(node);
-                    }
-                }
-            });
-
-            observer.observe(document.body || document.documentElement, {
-                childList: true,
-                subtree: true
-            });
-
-            return;
-        }
-
-        // --- Lógica Geral para outros sites (inalterada) ---
         
-        const allowedHostnames = ['canva.com', 'placeit.net', 'hailuoai.video', 'vectorizer.ai'];
+        // Verifica se o hostname atual está na lista de exceções.
         const isSiteAllowed = allowedHostnames.some(hostname => currentHostname.includes(hostname));
-
+    
         if (isSiteAllowed) {
+            // Se o site está na lista, exibe uma mensagem e não faz mais nada, permitindo os tooltips.
             console.log(`[SECURE BROWSER] Tooltips liberados para o site na lista de exceções: ${currentHostname}`);
-            return;
+            return; // Interrompe a função aqui.
         }
-
-        console.log(`[SECURE BROWSER] Aplicando bloqueio de tooltips geral para: ${currentHostname}`);
+    
+        // Se o site NÃO está na lista, aplica o bloqueio de tooltips como antes.
+        console.log(`[SECURE BROWSER] Aplicando bloqueio de tooltips para: ${currentHostname}`);
         const antiTooltipStyle = document.createElement('style');
         antiTooltipStyle.id = 'secure-browser-anti-tooltip';
         antiTooltipStyle.textContent = `[role="tooltip"], .tooltip, .ui-tooltip, [data-tooltip] { display: none !important; visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; }`;
         (document.head || document.documentElement).appendChild(antiTooltipStyle);
     }
-    
+
     // =================================================================================
     // >>>>>>>>>>>>>>>>>>>>>>>> FIM DA FUNÇÃO MODIFICADA <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
     // =================================================================================
@@ -375,9 +321,7 @@ console.log('%c[PRELOAD SCRIPT VFINAL] Notificação Corrigida!', 'color: #00FF0
         const observer = new MutationObserver(() => {
             if (!document.getElementById(CONTAINER_ID)) { isInitialized = false; createTitleBar(); }
             if (!document.getElementById('secure-browser-layout-adjust')) applyLayoutAdjustment();
-            if (!document.getElementById('secure-browser-anti-tooltip') && !window.location.hostname.includes('leonardo.ai')) {
-                setupAntiTooltipProtection();
-            }
+            if (!document.getElementById('secure-browser-anti-tooltip')) setupAntiTooltipProtection();
             adjustFixedHeaders();
         });
         observer.observe(document.documentElement, { childList: true, subtree: true });
