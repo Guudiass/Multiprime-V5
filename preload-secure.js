@@ -1,6 +1,4 @@
-// preload-secure.js CORRIGIDO (v3 - Ajuste Fino)
-
-console.log('%c[PRELOAD] Iniciando sistema seguro...', 'color: #00FF00; font-size: 16px;');
+// preload-secure.js
 
 // Camuflagem Anti-Detecção de Bots
 Object.defineProperty(navigator, 'webdriver', { get: () => false });
@@ -20,173 +18,6 @@ window.navigator.permissions.query = (parameters) =>
 
 const { ipcRenderer } = require('electron');
 
-// ===== SISTEMA DE LOGIN AUTOMÁTICO =====
-let autoLoginCredentials = null;
-let loginAttempted = false;
-
-// Função para preencher campos rapidamente
-function fillFieldFast(field, value) {
-    if (!field || !value) return false;
-    
-    try {
-        field.focus();
-        field.value = '';
-        field.value = value;
-        
-        // Dispara eventos necessários
-        field.dispatchEvent(new Event('input', { bubbles: true }));
-        field.dispatchEvent(new Event('change', { bubbles: true }));
-        
-        console.log(`[AUTO-LOGIN] ✅ Campo preenchido: ${field.id || field.name} = ${value}`);
-        return true;
-    } catch (error) {
-        console.error('[AUTO-LOGIN] ❌ Erro ao preencher campo:', error);
-        return false;
-    }
-}
-
-// Função principal de login
-function performAutoLogin() {
-    if (!autoLoginCredentials || loginAttempted) return;
-    
-    const { usuariodaferramenta, senhadaferramenta } = autoLoginCredentials;
-    
-    console.log('[AUTO-LOGIN] 🚀 Iniciando login automático...');
-    console.log('[AUTO-LOGIN] 📧 Usuário:', usuariodaferramenta);
-    console.log('[AUTO-LOGIN] 🌐 URL:', window.location.href);
-    
-    // Busca campos específicos do noxtools.com
-    const emailField = document.querySelector('input[id="amember-login"]') || 
-                      document.querySelector('input[name="amember_login"]') ||
-                      document.querySelector('input[type="email"]') ||
-                      document.querySelector('input[placeholder*="Username" i]');
-                      
-    const passwordField = document.querySelector('input[id="amember-pass"]') || 
-                         document.querySelector('input[name="amember_pass"]') ||
-                         document.querySelector('input[type="password"]');
-    
-    if (emailField && passwordField) {
-        console.log('[AUTO-LOGIN] ✅ Campos encontrados!');
-        
-        // Preenche os campos
-        const emailFilled = fillFieldFast(emailField, usuariodaferramenta);
-        const passwordFilled = fillFieldFast(passwordField, senhadaferramenta);
-        
-        if (emailFilled && passwordFilled) {
-            loginAttempted = true;
-            
-            // Procura o botão de submit
-            setTimeout(() => {
-                const submitButton = document.querySelector('input[type="submit"]') ||
-                                   document.querySelector('button[type="submit"]') ||
-                                   emailField.closest('form')?.querySelector('input[type="submit"]') ||
-                                   emailField.closest('form')?.querySelector('button[type="submit"]');
-                
-                if (submitButton) {
-                    console.log('[AUTO-LOGIN] 🔘 Clicando no botão submit...');
-                    submitButton.click();
-                    
-                    // Também tenta submit no formulário
-                    const form = emailField.closest('form');
-                    if (form) {
-                        setTimeout(() => form.submit(), 100);
-                    }
-                } else {
-                    console.log('[AUTO-LOGIN] 🔘 Tentando Enter no campo senha...');
-                    passwordField.focus();
-                    passwordField.dispatchEvent(new KeyboardEvent('keydown', { 
-                        key: 'Enter', 
-                        keyCode: 13, 
-                        bubbles: true 
-                    }));
-                    
-                    // Fallback: submit direto do formulário
-                    const form = passwordField.closest('form');
-                    if (form) {
-                        setTimeout(() => form.submit(), 100);
-                    }
-                }
-                
-                showNotification('🔐 Login automático executado!');
-                
-            }, 300);
-        }
-    } else {
-        console.log('[AUTO-LOGIN] ❌ Campos não encontrados');
-        
-        // Debug: mostra todos os inputs
-        const allInputs = document.querySelectorAll('input');
-        console.log('[AUTO-LOGIN] 📋 Inputs na página:');
-        allInputs.forEach((input, i) => {
-            console.log(`  ${i}: type="${input.type}" id="${input.id}" name="${input.name}" placeholder="${input.placeholder}"`);
-        });
-        
-        // Tenta novamente em 2 segundos
-        setTimeout(() => {
-            loginAttempted = false;
-            performAutoLogin();
-        }, 2000);
-    }
-}
-
-// Função para tentar login quando site for detectado
-function attemptAutoLogin() {
-    if (!autoLoginCredentials) {
-        console.log('[AUTO-LOGIN] ⚠️  Nenhuma credencial disponível');
-        return;
-    }
-    
-    const hostname = window.location.hostname;
-    console.log('[AUTO-LOGIN] 🌐 Verificando site:', hostname);
-    
-    if (hostname.includes('noxtools.com')) {
-        console.log('[AUTO-LOGIN] ✅ Site noxtools.com detectado!');
-        
-        // Aguarda um pouco para a página carregar
-        setTimeout(() => {
-            performAutoLogin();
-        }, 1500);
-    } else {
-        console.log('[AUTO-LOGIN] ❌ Não é noxtools.com, ignorando');
-    }
-}
-
-// Recebe credenciais do processo principal
-ipcRenderer.on('set-auto-login-credentials', (event, credentials) => {
-    autoLoginCredentials = credentials;
-    loginAttempted = false;
-    
-    console.log('[AUTO-LOGIN] 🔑 Credenciais recebidas!');
-    console.log('[AUTO-LOGIN] 👤 Usuário:', credentials.usuariodaferramenta);
-    console.log('[AUTO-LOGIN] 🔒 Senha:', credentials.senhadaferramenta ? '***DEFINIDA***' : 'VAZIA');
-    
-    // Tenta login imediatamente
-    attemptAutoLogin();
-});
-
-// Monitora navegação
-let currentUrl = window.location.href;
-setInterval(() => {
-    if (window.location.href !== currentUrl) {
-        currentUrl = window.location.href;
-        loginAttempted = false;
-        console.log('[AUTO-LOGIN] 🔄 URL mudou:', currentUrl);
-        setTimeout(attemptAutoLogin, 1000);
-    }
-}, 1000);
-
-// Tenta login quando página carregar
-window.addEventListener('load', () => {
-    console.log('[AUTO-LOGIN] 📄 Página carregada');
-    setTimeout(attemptAutoLogin, 2000);
-});
-
-document.addEventListener('DOMContentLoaded', () => {
-    console.log('[AUTO-LOGIN] 📋 DOM carregado');
-    setTimeout(attemptAutoLogin, 1000);
-});
-
-// ===== SISTEMA DE SESSÕES =====
 ipcRenderer.on('inject-session-data', (event, sessionData) => {
     (async () => {
         try {
@@ -214,7 +45,7 @@ ipcRenderer.on('inject-session-data', (event, sessionData) => {
 
 ipcRenderer.send('request-session-data');
 
-// Funções de IndexedDB
+// Funções de IndexedDB (sem alterações)
 async function exportIndexedDB() {
     try {
         const allData = {};
@@ -298,15 +129,15 @@ async function importIndexedDB(dataToImport) {
     }
 }
 
-// ===== BARRA DE TÍTULO SUPER ROBUSTA =====
+console.log('%c[PRELOAD SCRIPT VFINAL] Notificação Corrigida!', 'color: #00FF00; font-size: 16px;');
+
+// ===== BARRA OTIMIZADA COM PROTEÇÃO ANTI-TOOLTIP =====
+
 (() => {
     const TITLE_BAR_HEIGHT = 40;
-    const CONTAINER_ID = 'secure-browser-titlebar-ultimate';
-    let titleBarContainer = null;
-    let isCreated = false;
+    const CONTAINER_ID = 'secure-browser-titlebar-2025';
+    let isInitialized = false;
     const downloads = new Map();
-<<<<<<< HEAD
-=======
     let container = null;
     let shadowRoot = null;
 
@@ -405,42 +236,23 @@ async function importIndexedDB(dataToImport) {
             console.error('[SECURE BROWSER] Erro ao criar barra:', error);
         }
     }
->>>>>>> cb7c3beda52a2468dabc4c96923172f5d34d9d3d
 
-    // Função para mostrar notificação
     function showNotification(text) {
+        if (!shadowRoot) return;
         const notif = document.createElement('div');
-        notif.style.cssText = `
-            position: fixed !important;
-            top: 50px !important;
-            right: 20px !important;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-            color: white !important;
-            padding: 12px 20px !important;
-            border-radius: 8px !important;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
-            font-size: 14px !important;
-            font-weight: 500 !important;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.3) !important;
-            z-index: 2147483647 !important;
-            transition: all 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55) !important;
-            transform: translateX(400px) !important;
-            border: none !important;
-            backdrop-filter: blur(10px) !important;
-        `;
+        notif.className = 'notification-popup';
         notif.textContent = text;
-        
-        document.body.appendChild(notif);
-        
+        shadowRoot.appendChild(notif);
+        requestAnimationFrame(() => {
+            notif.classList.add('visible');
+        });
         setTimeout(() => {
-            notif.style.transform = 'translateX(0) !important';
-        }, 100);
-        
-        setTimeout(() => {
-            notif.style.transform = 'translateX(400px) !important';
+            notif.classList.remove('visible');
             setTimeout(() => {
-                if (notif.parentNode) notif.parentNode.removeChild(notif);
-            }, 400);
+                if (notif.parentNode === shadowRoot) {
+                   shadowRoot.removeChild(notif);
+                }
+            }, 500);
         }, 4000);
     }
     
@@ -448,99 +260,6 @@ async function importIndexedDB(dataToImport) {
     // >>>>>>>>>>>>>>>>>>>> FUNÇÃO ROBUSTA (FORÇA + VELOCIDADE) <<<<<<<<<<<<<<<<<<<<<<<<
     // =================================================================================
 
-<<<<<<< HEAD
-    // Cria a barra de título
-    function createTitleBar() {
-        if (isCreated) return;
-        
-        console.log('[TITLE BAR] 🔨 Criando barra super robusta...');
-        
-        try {
-            const existing = document.getElementById(CONTAINER_ID);
-            if (existing) existing.remove();
-            
-            titleBarContainer = document.createElement('div');
-            titleBarContainer.id = CONTAINER_ID;
-            titleBarContainer.setAttribute('data-secure-bar', 'true');
-            
-            titleBarContainer.style.cssText = `
-                position: fixed !important;
-                top: 0 !important;
-                left: 0 !important;
-                width: 100vw !important;
-                height: ${TITLE_BAR_HEIGHT}px !important;
-                z-index: 2147483647 !important;
-                pointer-events: auto !important;
-                background: linear-gradient(180deg, #2c3e50 0%, #34495e 100%) !important;
-                border-bottom: 1px solid #1a252f !important;
-                box-shadow: 0 2px 10px rgba(0,0,0,0.3) !important;
-                display: flex !important;
-                align-items: center !important;
-                justify-content: space-between !important;
-                padding: 0 10px !important;
-                box-sizing: border-box !important;
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
-                font-size: 14px !important;
-                color: #ecf0f1 !important;
-                user-select: none !important;
-                -webkit-app-region: drag !important;
-            `;
-            
-            titleBarContainer.innerHTML = `
-                <div style="display: flex; align-items: center; gap: 8px; -webkit-app-region: no-drag;">
-                    <button id="btn-back" style="width: 30px; height: 30px; background: transparent; color: #ecf0f1; border: none; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 20px; transition: background 0.2s;" title="Voltar">←</button>
-                    <button id="btn-forward" style="width: 30px; height: 30px; background: transparent; color: #ecf0f1; border: none; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 20px; transition: background 0.2s;" title="Avançar">→</button>
-                    <button id="btn-reload" style="width: 30px; height: 30px; background: transparent; color: #ecf0f1; border: none; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 18px; transition: background 0.2s;" title="Recarregar">↻</button>
-                </div>
-                
-                <div style="flex: 1; display: flex; align-items: center; gap: 10px; padding: 0 20px; -webkit-app-region: no-drag;">
-                    <div style="width: 8px; height: 8px; border-radius: 50%; background: ${navigator.onLine ? '#2ecc71' : '#e74c3c'};"></div>
-                    <input type="text" id="url-display" readonly style="flex: 1; height: 26px; background: rgba(0,0,0,0.2); border: 1px solid #2c3e50; border-radius: 13px; color: #ecf0f1; padding: 0 12px; font-size: 12px; text-align: center; outline: none; cursor: default;" value="${window.location.href}">
-                </div>
-                
-                <div style="display: flex; align-items: center; gap: 8px; -webkit-app-region: no-drag;">
-                    <button id="btn-downloads" style="width: 30px; height: 30px; background: transparent; color: #ecf0f1; border: none; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; transition: background 0.2s;" title="Downloads">📥</button>
-                    <button id="btn-minimize" style="width: 30px; height: 30px; background: transparent; color: #ecf0f1; border: none; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 18px; transition: background 0.2s;" title="Minimizar">−</button>
-                    <button id="btn-maximize" style="width: 30px; height: 30px; background: transparent; color: #ecf0f1; border: none; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 18px; transition: background 0.2s;" title="Maximizar">☐</button>
-                    <button id="btn-close" style="width: 30px; height: 30px; background: transparent; color: #ecf0f1; border: none; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 18px; transition: background 0.2s;" title="Fechar" onmouseover="this.style.background='#e74c3c'" onmouseout="this.style.background='transparent'">×</button>
-                </div>
-            `;
-            
-            const buttons = titleBarContainer.querySelectorAll('button:not(#btn-close)');
-            buttons.forEach(btn => {
-                btn.addEventListener('mouseenter', () => btn.style.background = 'rgba(255,255,255,0.1)');
-                btn.addEventListener('mouseleave', () => btn.style.background = 'transparent');
-            });
-            
-            titleBarContainer.querySelector('#btn-back').onclick = () => ipcRenderer.send('navigate-back');
-            titleBarContainer.querySelector('#btn-forward').onclick = () => ipcRenderer.send('navigate-forward');
-            titleBarContainer.querySelector('#btn-reload').onclick = () => ipcRenderer.send('navigate-reload');
-            titleBarContainer.querySelector('#btn-downloads').onclick = () => showNotification('📥 Downloads em desenvolvimento');
-            titleBarContainer.querySelector('#btn-minimize').onclick = () => ipcRenderer.send('minimize-secure-window');
-            titleBarContainer.querySelector('#btn-maximize').onclick = () => ipcRenderer.send('maximize-secure-window');
-            titleBarContainer.querySelector('#btn-close').onclick = () => ipcRenderer.send('close-secure-window');
-            
-            document.documentElement.insertBefore(titleBarContainer, document.documentElement.firstChild);
-            
-            applyLayoutAdjustment();
-            
-            setTimeout(() => {
-                document.documentElement.style.transform = 'translateZ(0)';
-                setTimeout(() => {
-                    document.documentElement.style.transform = '';
-                }, 10);
-            }, 100);
-            
-            isCreated = true;
-            console.log('[TITLE BAR] ✅ Barra criada com sucesso!');
-            
-        } catch (error) {
-            console.error('[TITLE BAR] ❌ Erro ao criar barra:', error);
-        }
-    }
-    
-    // FUNÇÃO HÍBRIDA: Aplica lógicas diferentes para ChatGPT e outros sites.
-=======
     function setupAntiTooltipProtection() {
         const currentHostname = window.location.hostname;
 
@@ -628,120 +347,32 @@ async function importIndexedDB(dataToImport) {
     // >>>>>>>>>>>>>>>>>>>>>>>> FIM DA FUNÇÃO MODIFICADA <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
     // =================================================================================
 
->>>>>>> cb7c3beda52a2468dabc4c96923172f5d34d9d3d
     function applyLayoutAdjustment() {
-        let styleEl = document.getElementById('secure-layout-adjustment');
+        let styleEl = document.getElementById('secure-browser-layout-adjust');
         if (!styleEl) {
             styleEl = document.createElement('style');
-            styleEl.id = 'secure-layout-adjustment';
-            document.head.appendChild(styleEl);
+            styleEl.id = 'secure-browser-layout-adjust';
+            (document.head || document.documentElement).appendChild(styleEl);
         }
-        
-        const isChatGPT = window.location.hostname.includes('chatgpt.com') || 
-                         window.location.hostname.includes('chat.openai.com');
-        
-        if (isChatGPT) {
-            // Método suave para ChatGPT para não quebrar botões
-            styleEl.textContent = `
-                body {
-                    margin-top: ${TITLE_BAR_HEIGHT}px !important;
-                    height: auto !important;
+        styleEl.textContent = `:root { --secure-browser-titlebar-height: ${TITLE_BAR_HEIGHT}px; } html { position: relative !important; top: var(--secure-browser-titlebar-height) !important; height: calc(100vh - var(--secure-browser-titlebar-height)) !important; overflow-y: auto !important; } body { min-height: 100% !important; height: auto !important; }`;
+    }
+
+    function adjustFixedHeaders() {
+        const elements = document.querySelectorAll('body *');
+        for (const el of elements) {
+            if (el.id === CONTAINER_ID || el.closest(`#${CONTAINER_ID}`) || el.dataset.adjusted === 'true') continue;
+            try {
+                const style = window.getComputedStyle(el);
+                if ((style.position === 'fixed' || style.position === 'sticky') && style.top === '0px') {
+                    el.style.setProperty('top', `${TITLE_BAR_HEIGHT}px`, 'important');
+                    el.dataset.adjusted = 'true';
                 }
-            `;
-            console.log(`[LAYOUT] ✅ Aplicado: Método suave para ChatGPT.`);
-        } else {
-            // Método robusto para todos os outros sites
-            styleEl.textContent = `
-                :root { --secure-browser-titlebar-height: ${TITLE_BAR_HEIGHT}px; }
-                html { 
-                    position: relative !important; 
-                    top: var(--secure-browser-titlebar-height) !important; 
-                    height: calc(100vh - var(--secure-browser-titlebar-height)) !important; 
-                    overflow-y: auto !important; 
-                } 
-                body { 
-                    min-height: 100% !important; 
-                    height: auto !important; 
-                }
-            `;
-            console.log(`[LAYOUT] ✅ Aplicado: Método robusto para outros sites.`);
+            } catch (e) { /* Ignora */ }
         }
     }
 
-    // FUNÇÃO HÍBRIDA: Ajusta elementos sobrepostos de forma diferente
-    function adjustOverlappingElements() {
-        const isChatGPT = window.location.hostname.includes('chatgpt.com') || 
-                         window.location.hostname.includes('chat.openai.com');
-        
-        if (isChatGPT) {
-            // Para ChatGPT: Apenas ajusta elementos fixos no topo para descerem
-            const elements = document.querySelectorAll('*');
-            for (const el of elements) {
-                if (el.id === CONTAINER_ID || el.closest(`#${CONTAINER_ID}`)) continue;
-                try {
-                    const style = window.getComputedStyle(el);
-                    if (style.position === 'fixed' && style.top === '0px' && !el.dataset.adjusted) {
-                        el.style.setProperty('top', `${TITLE_BAR_HEIGHT}px`, 'important');
-                        el.dataset.adjusted = 'true';
-                    }
-                } catch (e) { /* Ignora */ }
-            }
-        } else {
-            // Para outros sites: usa a lógica mais completa e segura
-            const elements = document.querySelectorAll('body *');
-            for (const el of elements) {
-                if (el.id === CONTAINER_ID || el.closest(`#${CONTAINER_ID}`) || el.dataset.adjusted === 'true') continue;
-                try {
-                    const style = window.getComputedStyle(el);
-                    if ((style.position === 'fixed' || style.position === 'sticky') && style.top === '0px') {
-                        el.style.setProperty('top', `${TITLE_BAR_HEIGHT}px`, 'important');
-                        el.dataset.adjusted = 'true';
-                    }
-                } catch (e) { /* Ignora */ }
-            }
-        }
-        
-        // Proteção de Z-index para todos os sites
-        const highZIndexElements = document.querySelectorAll('*');
-        highZIndexElements.forEach(el => {
-            const computed = window.getComputedStyle(el);
-            const zIndex = parseInt(computed.zIndex);
-            
-            if (zIndex >= 2147483647 && el.id !== CONTAINER_ID) {
-                el.style.zIndex = '2147483646';
-            }
-        });
-    }
-
-    // Proteção anti-tooltip
-    function setupAntiTooltip() {
-        const allowedSites = ['canva.com', 'leonardo.ai', 'placeit.net', 'hailuoai.video', 'vectorizer.ai'];
-        const currentSite = window.location.hostname;
-        
-        if (!allowedSites.some(site => currentSite.includes(site))) {
-            const antiTooltipStyle = document.createElement('style');
-            antiTooltipStyle.id = 'anti-tooltip-protection';
-            antiTooltipStyle.textContent = `
-                [role="tooltip"], .tooltip, .ui-tooltip, [data-tooltip] {
-                    display: none !important;
-                    visibility: hidden !important;
-                    opacity: 0 !important;
-                    pointer-events: none !important;
-                }
-            `;
-            document.head.appendChild(antiTooltipStyle);
-        }
-    }
-    
-    // Monitor robusto
-    function setupRobustMonitoring() {
+    function setupDomMonitoring() {
         const observer = new MutationObserver(() => {
-<<<<<<< HEAD
-            if (!document.getElementById(CONTAINER_ID)) {
-                console.log('[TITLE BAR] 🔄 Barra removida, recriando...');
-                isCreated = false;
-                createTitleBar();
-=======
             if (!document.getElementById(CONTAINER_ID)) { isInitialized = false; createTitleBar(); }
             if (!document.getElementById('secure-browser-layout-adjust')) applyLayoutAdjustment();
             if (!document.getElementById('secure-browser-anti-tooltip') && !window.location.hostname.includes('leonardo.ai')) {
@@ -768,119 +399,70 @@ async function importIndexedDB(dataToImport) {
                 case 'minimize': ipcRenderer.send('minimize-secure-window'); break;
                 case 'maximize': ipcRenderer.send('maximize-secure-window'); break;
                 case 'close': ipcRenderer.send('close-secure-window'); break;
->>>>>>> cb7c3beda52a2468dabc4c96923172f5d34d9d3d
             }
-            
-            if (!document.getElementById('secure-layout-adjustment')) {
-                console.log('[LAYOUT] 🔄 Replicando ajuste de layout...');
-                applyLayoutAdjustment();
-            }
-            
-            adjustOverlappingElements();
         });
-        
-        observer.observe(document.documentElement, {
-            childList: true,
-            subtree: true,
-            attributes: true
-        });
-        
-        setInterval(() => {
-            if (!document.getElementById(CONTAINER_ID)) {
-                console.log('[TITLE BAR] 🔄 Verificação: barra ausente, recriando...');
-                isCreated = false;
-                createTitleBar();
+        shadowRoot.addEventListener('click', (e) => {
+            if (!e.target.closest('.downloads-menu') && !e.target.closest('[data-action="downloads"]')) {
+                shadowRoot.querySelector('.downloads-menu').classList.remove('open');
             }
-            
-            adjustOverlappingElements();
-        }, 3000);
+        });
+        const updateStatus = () => { if(shadowRoot) { const s = shadowRoot.querySelector('.status'); if(s) s.style.background = navigator.onLine ? '#2ecc71' : '#e74c3c'; } };
+        window.addEventListener('online', updateStatus);
+        window.addEventListener('offline', updateStatus);
     }
     
-    // Inicialização
-    function initialize() {
-        console.log('[TITLE BAR] 🚀 Inicializando sistema...');
-        
-        createTitleBar();
-        setupAntiTooltip();
-        setupRobustMonitoring();
-        
+    async function exportSession() {
+        const getStorage = (s) => { let o = {}; for (let i = 0; i < s.length; i++) { const k = s.key(i); if(k) o[k] = s.getItem(k); } return o; };
+        ipcRenderer.send('initiate-full-session-export', { localStorageData: getStorage(window.localStorage), sessionStorageData: getStorage(window.sessionStorage), indexedDBData: await exportIndexedDB() });
+    }
+    
+    function setupIpcListeners() {
         ipcRenderer.on('url-updated', (event, url) => {
-            const urlInput = document.getElementById('url-display');
-            if (urlInput) urlInput.value = url || window.location.href;
+            if (shadowRoot) { const urlInput = shadowRoot.querySelector('.url'); if (urlInput) urlInput.value = url; }
         });
-        
         ipcRenderer.on('download-started', (event, { id, filename }) => {
             downloads.set(id, { filename, progress: 0, state: 'active' });
-            showNotification(`📥 Download iniciado: ${filename}`);
+            updateDownloadsUI();
+            showNotification(`Download iniciado: ${filename}`);
         });
-        
         ipcRenderer.on('download-progress', (event, { id, progress }) => {
             const download = downloads.get(id);
-            if (download?.state === 'active') {
-                download.progress = progress;
-                if (progress % 25 === 0) {
-                    showNotification(`📊 Download ${progress}%: ${download.filename}`);
-                }
-            }
+            if (download?.state === 'active') { download.progress = progress; updateDownloadsUI(); }
         });
-        
         ipcRenderer.on('download-complete', (event, { id, state, path }) => {
             const download = downloads.get(id);
-            if (download) {
-                download.state = state;
-                download.path = path;
-                showNotification(`✅ Download concluído: ${download.filename}`);
-            }
+            if (download) { download.state = state; download.path = path; download.progress = (state === 'completed') ? 100 : download.progress; updateDownloadsUI(); }
         });
-        
-        ipcRenderer.send('request-initial-url');
-        
-        setTimeout(() => {
-            applyLayoutAdjustment();
-            adjustOverlappingElements();
-            
-            // =================================================================================
-            // >>>>>>>>>>>>>>>>> BLOCO DE AJUSTE FINO PARA O CHATGPT CORRIGIDO <<<<<<<<<<<<<<<<<<<<
-            // =================================================================================
-            if (window.location.hostname.includes('chatgpt.com') || window.location.hostname.includes('chat.openai.com')) {
-                setTimeout(() => {
-                    // Seletores mais seguros e específicos para a barra lateral
-                    const possibleSidebars = [
-                        'nav[aria-label]',
-                        '[role="navigation"]',
-                        'div[style*="width: 260px"]',
-                        'div[class*="sidebar"]'
-                    ];
-                    
-                    possibleSidebars.forEach(selector => {
-                        const sidebars = document.querySelectorAll(selector);
-                        sidebars.forEach(sidebar => {
-                            // Lógica mais inteligente: só aplica se o elemento precisar rolar
-                            if (sidebar && sidebar.scrollHeight > sidebar.clientHeight) {
-                                sidebar.style.setProperty('height', 'auto', 'important');
-                                sidebar.style.setProperty('max-height', `calc(100vh - ${TITLE_BAR_HEIGHT}px)`, 'important');
-                                sidebar.style.setProperty('overflow-y', 'auto', 'important');
-                                console.log('[LAYOUT] 📜 Sidebar do ChatGPT ajustada para scroll completo:', selector);
-                            }
-                        });
-                    });
-                }, 1500);
-            }
-        }, 1000);
     }
-    
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initialize);
-    } else {
-        initialize();
-    }
-    
-    window.addEventListener('load', () => {
-        if (!document.getElementById(CONTAINER_ID)) {
-            console.log('[TITLE BAR] 🔄 Load: criando barra...');
-            initialize();
-        }
-    });
-})();
 
-console.log('%c[PRELOAD] Sistema completo carregado!', 'color: #00FF00; font-size: 16px; font-weight: bold;');
+    function updateDownloadsUI() {
+        if (!shadowRoot) return;
+        const menu = shadowRoot.querySelector('.downloads-menu');
+        if (!menu) return;
+        menu.innerHTML = '';
+        downloads.forEach((dl) => {
+            const item = document.createElement('div');
+            item.className = 'dl-item';
+            let status = `${dl.progress}%`;
+            if (dl.state === 'completed') status = 'Concluído'; else if (dl.state === 'cancelled') status = 'Cancelado'; else if (dl.state === 'interrupted') status = 'Falha';
+            item.innerHTML = `<div class="dl-info"><span class="dl-name" title="${dl.filename}">${dl.filename}</span><span>${status}</span></div><div class="dl-progress"><div class="dl-bar ${dl.state === 'completed' ? 'done' : ''}" style="width: ${dl.progress}%"></div></div>`;
+            if (dl.state === 'completed' && dl.path) {
+                const actions = document.createElement('div');
+                actions.className = 'dl-actions';
+                actions.innerHTML = `<a class="dl-action" data-path="${dl.path}" data-action="open">Abrir</a><a class="dl-action" data-path="${dl.path}" data-action="show">Mostrar na pasta</a>`;
+                actions.addEventListener('click', (e) => {
+                    const target = e.target.closest('.dl-action');
+                    if(target) ipcRenderer.send(target.dataset.action === 'open' ? 'open-download' : 'show-download-in-folder', target.dataset.path);
+                });
+                item.appendChild(actions);
+            }
+            menu.appendChild(item);
+        });
+    }
+    
+    if (document.readyState === 'interactive' || document.readyState === 'complete') {
+        createTitleBar();
+    } else {
+        document.addEventListener('DOMContentLoaded', createTitleBar, { once: true });
+    }
+})();
