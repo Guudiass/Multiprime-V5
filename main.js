@@ -12284,7 +12284,7 @@ async function uploadToGitHub(filePath, content, token, commitMessage = 'Atualiz
 }
 
 
-// ===== FUNÇÕES PRINCIPAIS (sem alterações) =====
+// ===== FUNÇÕES PRINCIPAIS =====
 async function limparParticoesAntigas() {
     const userDataPath = app.getPath('userData');
     const partitionsPath = path.join(userDataPath, 'Partitions');
@@ -12367,13 +12367,17 @@ ipcMain.on('abrir-navegador', async (event, perfil) => {
     const partition = `persist:${windowId}`;
     const isolatedSession = session.fromPartition(partition);
     let secureWindow = null;
+    
     try {
         if (!perfil || !perfil.link) throw new Error('Perfil ou link inválido.');
+
         console.log(`[SESSÃO ${windowId}] Limpando armazenamento prévio da sessão...`);
         await isolatedSession.clearStorageData();
+
         if (perfil.userAgent) {
             await isolatedSession.setUserAgent(perfil.userAgent);
         }
+
         let sessionData = null;
         if (perfil.ftp && perfil.senha) {
             try {
@@ -12387,11 +12391,13 @@ ipcMain.on('abrir-navegador', async (event, perfil) => {
                 console.error(`[SESSÃO ${windowId}] Falha ao buscar dados do GitHub:`, err.message);
             }
         }
+
         let cookiesToInject = [];
         if (sessionData) {
             if (Array.isArray(sessionData)) cookiesToInject = sessionData;
             else if (sessionData.cookies && Array.isArray(sessionData.cookies)) cookiesToInject = sessionData.cookies;
         }
+
         if (cookiesToInject.length > 0) {
             console.log(`[SESSÃO ${windowId}] Preparando para injetar ${cookiesToInject.length} cookie(s)...`);
             let successCount = 0, failureCount = 0;
@@ -12408,26 +12414,63 @@ ipcMain.on('abrir-navegador', async (event, perfil) => {
             console.log(`[SESSÃO ${windowId}] Injeção concluída. Sucesso: ${successCount}, Falhas: ${failureCount}`);
             await isolatedSession.cookies.flushStore();
         }
+
         const storageData = { localStorage: sessionData?.localStorage, sessionStorage: sessionData?.sessionStorage, indexedDB: sessionData?.indexedDB };
+
         ipcMain.once('request-session-data', (e) => {
             if (secureWindow && !secureWindow.isDestroyed() && e.sender === secureWindow.webContents) {
                 e.sender.send('inject-session-data', storageData);
             }
         });
+
         secureWindow = new BrowserWindow({
             ...CONFIG.WINDOW_DEFAULTS,
             frame: false, show: false,
             webPreferences: {
                 session: isolatedSession,
-                // MUITO IMPORTANTE: Garanta que o nome do arquivo aqui corresponde ao nome do seu preload
+																										  
                 preload: path.join(__dirname, 'preload-secure.js'), 
                 contextIsolation: true, nodeIntegration: false, devTools: true
             }
         });
+
         windowProfiles.set(secureWindow.webContents.id, perfil);
-        secureWindow.webContents.on('did-navigate', (e, url) => { if (secureWindow && !secureWindow.isDestroyed()) secureWindow.webContents.send('url-updated', url); });
-        
-        // >>> INÍCIO DA CORREÇÃO <<<
+
+        secureWindow.webContents.on('did-navigate', (e, url) => { 
+            if (secureWindow && !secureWindow.isDestroyed()) {
+                secureWindow.webContents.send('url-updated', url);
+            }
+        });
+
+        // ===== NOVO SISTEMA DE LOGIN AUTOMÁTICO =====
+        // Verifica se o perfil tem credenciais de login automático
+        if (perfil.usuariodaferramenta && perfil.senhadaferramenta) {
+            console.log(`[AUTO-LOGIN] Configurando login automático para: ${perfil.usuariodaferramenta}`);
+            
+            // Envia as credenciais para o preload script após a janela estar pronta
+            secureWindow.webContents.once('did-finish-load', () => {
+                if (secureWindow && !secureWindow.isDestroyed()) {
+                    console.log(`[AUTO-LOGIN] Enviando credenciais para preload script...`);
+                    secureWindow.webContents.send('set-auto-login-credentials', {
+                        usuariodaferramenta: perfil.usuariodaferramenta,
+                        senhadaferramenta: perfil.senhadaferramenta
+                    });
+                }
+            });
+
+            // Também envia quando há navegação para nova página
+            secureWindow.webContents.on('did-navigate', () => {
+                if (secureWindow && !secureWindow.isDestroyed()) {
+                    console.log(`[AUTO-LOGIN] Reenviando credenciais após navegação...`);
+                    secureWindow.webContents.send('set-auto-login-credentials', {
+                        usuariodaferramenta: perfil.usuariodaferramenta,
+                        senhadaferramenta: perfil.senhadaferramenta
+                    });
+                }
+            });
+        }
+
+        // Configuração do proxy (com correção para Envato)
         if (perfil.proxy?.host && perfil.proxy?.port) {
             const proxyValidation = validateProxyConfig(perfil.proxy);
             if (!proxyValidation.valid) {
@@ -12442,10 +12485,10 @@ ipcMain.on('abrir-navegador', async (event, perfil) => {
                     case 'http': case 'https': default: proxyRules = `http://${perfil.proxy.host}:${proxyValidation.port}`; break;
                 }
                 
-                // Esta é a regra de bypass. Adicionamos o servidor de download do Envato aqui.
+																								
                 const bypassRules = [
                     perfil.proxy.bypass || '',
-                    '*.envatousercontent.com' // Ignora o proxy para todos os subdomínios de download do Envato
+                    '*.envatousercontent.com'
                 ].filter(Boolean).join(',');
 
                 console.log(`[SESSÃO ${windowId}] Configurando proxy ${proxyType}: ${proxyRules}`);
@@ -12453,7 +12496,7 @@ ipcMain.on('abrir-navegador', async (event, perfil) => {
 
                 await isolatedSession.setProxy({ 
                     proxyRules: proxyRules, 
-                    proxyBypassRules: bypassRules // <-- A MÁGICA ACONTECE AQUI
+                    proxyBypassRules: bypassRules
                 });
 
                 if (perfil.proxy.username) {
@@ -12463,7 +12506,7 @@ ipcMain.on('abrir-navegador', async (event, perfil) => {
         } else {
             await isolatedSession.setProxy({ proxyRules: 'direct://' });
         }
-        // >>> FIM DA CORREÇÃO <<<
+									
 
         await setupDownloadManager(secureWindow, isolatedSession);
         secureWindow.once('ready-to-show', () => secureWindow.show());
@@ -12473,8 +12516,10 @@ ipcMain.on('abrir-navegador', async (event, perfil) => {
             windowProfiles.delete(secureWindow.webContents.id);
             secureWindow = null;
         });
+
         console.log(`[SISTEMA ${windowId}] Preparação concluída. Carregando URL...`);
         await secureWindow.loadURL(perfil.link);
+
     } catch (err) {
         console.error('--- [ERRO FATAL] Falha ao criar janela:', err);
         if (secureWindow && !secureWindow.isDestroyed()) secureWindow.destroy();
@@ -12489,7 +12534,7 @@ function findUniquePath(proposedPath) {
     return newPath;
 }
 
-// O resto do arquivo (setupDownloadManager, IPCs, etc.) permanece exatamente o mesmo
+																					 
 async function setupDownloadManager(win, isolatedSession) {
     isolatedSession.on('will-download', (event, item) => {
         if (win.isDestroyed()) {
@@ -12551,10 +12596,12 @@ ipcMain.on('navigate-back', e => { const wc = getWindowFromEvent(e)?.webContents
 ipcMain.on('navigate-forward', e => { const wc = getWindowFromEvent(e)?.webContents; if (wc?.canGoForward()) wc.goForward(); });
 ipcMain.on('navigate-reload', e => getWindowFromEvent(e)?.webContents.reload());
 ipcMain.on('navigate-to-url', (event, url) => { const wc = getWindowFromEvent(event)?.webContents; if (wc && url) wc.loadURL(url); });
+
 ipcMain.on('initiate-full-session-export', async (event, storageData) => {
     const window = BrowserWindow.fromWebContents(event.sender);
     if (!window || window.isDestroyed()) return;
     const perfil = windowProfiles.get(window.webContents.id);
+    
     try {
         const currentSession = window.webContents.session;
         const cookies = await currentSession.cookies.get({});
@@ -12567,6 +12614,7 @@ ipcMain.on('initiate-full-session-export', async (event, storageData) => {
             indexedDB: storageData.indexedDBData
         };
         const jsonContent = JSON.stringify(fullSessionData, null, 4);
+        
         if (perfil && perfil.ftp && perfil.senha) {
             console.log(`[EXPORTAÇÃO] Iniciando upload da sessão para GitHub: ${perfil.ftp}`);
             try {
