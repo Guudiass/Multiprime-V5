@@ -227,8 +227,13 @@ if (appArgs.widevine) {
 }
 else {
 const fs = require('fs');
-const https = require('https'); // <-- CORREÇÃO APLICADA AQUI
+const https = require('https');
 const path = require('path');
+const { spawn } = require('child_process');
+
+// Configurações simples
+const MAX_RETRIES = 2;
+const RETRY_DELAY = 1000;
 
 // Função para adicionar timestamp às URLs e evitar cache
 function addTimestamp(url) {
@@ -264,77 +269,60 @@ const files = [
     }
 ];
 
-// Funções de backup e restauração generalizadas
+// Funções de backup e restauração
 function backupFile(filePath) {
     const backupPath = `${filePath}.bak`;
-    
     if (fs.existsSync(filePath)) {
         try {
             fs.copyFileSync(filePath, backupPath);
-            console.log(`Cópia de segurança de ${path.basename(filePath)} criada com sucesso.`);
+            console.log(`Backup criado: ${path.basename(filePath)}`);
             return true;
         } catch (err) {
-            console.error(`Erro ao criar cópia de segurança de ${path.basename(filePath)}:`, err.message);
+            console.error(`Erro ao criar backup de ${path.basename(filePath)}:`, err.message);
             return false;
         }
-    } else {
-        console.log(`Arquivo ${path.basename(filePath)} não encontrado para backup.`);
-        return false;
     }
+    return false;
 }
 
 function restoreFileFromBackup(filePath) {
     const backupPath = `${filePath}.bak`;
-    
     if (fs.existsSync(backupPath)) {
         try {
             fs.copyFileSync(backupPath, filePath);
-            console.log(`${path.basename(filePath)} restaurado do backup com sucesso.`);
+            console.log(`Restaurado do backup: ${path.basename(filePath)}`);
             return true;
         } catch (err) {
-            console.error(`Erro ao restaurar ${path.basename(filePath)} do backup:`, err.message);
+            console.error(`Erro ao restaurar ${path.basename(filePath)}:`, err.message);
             return false;
         }
-    } else {
-        console.log(`Arquivo de backup ${path.basename(backupPath)} não encontrado.`);
-        return false;
     }
+    return false;
 }
 
-// Nova função para limpar arquivos .js da pasta inject
+// Função para limpar arquivos .js da pasta inject
 function cleanInjectFolder() {
     const injectPath = path.join(__dirname, '..', 'inject');
-    
     console.log('Limpando arquivos .js da pasta inject...');
     
-    // Verificar se a pasta inject existe
-    if (!fs.existsSync(injectPath)) {
-        console.log('Pasta inject não encontrada. Criando...');
-        try {
-            fs.mkdirSync(injectPath, { recursive: true });
-            console.log('Pasta inject criada com sucesso.');
-        } catch (err) {
-            console.error('Erro ao criar pasta inject:', err.message);
-        }
-        return;
-    }
-    
     try {
-        // Ler todos os arquivos da pasta inject
+        if (!fs.existsSync(injectPath)) {
+            fs.mkdirSync(injectPath, { recursive: true });
+            console.log('Pasta inject criada.');
+            return;
+        }
+        
         const files = fs.readdirSync(injectPath);
         let deletedCount = 0;
         
         for (const file of files) {
-            // Verificar se é um arquivo .js
             if (path.extname(file).toLowerCase() === '.js') {
                 const filePath = path.join(injectPath, file);
-                
                 try {
-                    // Verificar se é realmente um arquivo (não uma pasta)
                     const stats = fs.statSync(filePath);
                     if (stats.isFile()) {
                         fs.unlinkSync(filePath);
-                        console.log(`Arquivo removido: inject/${file}`);
+                        console.log(`Removido: inject/${file}`);
                         deletedCount++;
                     }
                 } catch (err) {
@@ -346,20 +334,22 @@ function cleanInjectFolder() {
         if (deletedCount === 0) {
             console.log('Nenhum arquivo .js encontrado na pasta inject.');
         } else {
-            console.log(`Total de ${deletedCount} arquivo(s) .js removido(s) da pasta inject.`);
+            console.log(`${deletedCount} arquivo(s) .js removido(s) da pasta inject.`);
         }
-        
     } catch (err) {
         console.error('Erro ao acessar pasta inject:', err.message);
     }
 }
 
 // Função para excluir arquivos antes do download
-async function deleteFiles() {
+function deleteFiles() {
     console.log('Excluindo arquivos existentes e criando backups...');
     
-    // Primeiro, limpar a pasta inject
-    cleanInjectFolder();
+    try {
+        cleanInjectFolder();
+    } catch (err) {
+        console.error('Erro na limpeza da pasta inject:', err.message);
+    }
     
     for (const file of files) {
         if (file.critical) {
@@ -371,181 +361,265 @@ async function deleteFiles() {
                 console.log(`Excluído: ${file.dest}`);
             }
         } catch (err) {
-            console.error(`Erro ao excluir ${file.dest}: ${err.message}. O processo continuará.`);
+            console.error(`Erro ao excluir ${file.dest}: ${err.message}`);
         }
     }
     console.log('Limpeza de arquivos concluída.');
 }
 
-// Função para baixar arquivos com retry para arquivos críticos
-function downloadFile(url, dest, isCritical = false, retries = 3, retryDelay = 2000) {
+// Função simples para download
+function downloadFile(url, dest, isCritical = false) {
     return new Promise((resolve, reject) => {
         const dir = path.dirname(dest);
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
-        const tempDest = isCritical ? `${dest}.temp` : dest;
         
-        const download = (attemptNumber) => {
-            console.log(`Tentativa ${attemptNumber} de baixar ${url} para ${dest}`);
-            
-            const file = fs.createWriteStream(tempDest);
-            
-            https.get(url, (response) => {
-                if (response.statusCode !== 200) {
-                    file.close();
-                    if(fs.existsSync(tempDest)) fs.unlink(tempDest, () => {});
-                    
-                    if (isCritical && attemptNumber < retries) {
-                        console.log(`Tentativa ${attemptNumber} falhou com código ${response.statusCode}. Tentando novamente em ${retryDelay}ms...`);
-                        setTimeout(() => download(attemptNumber + 1), retryDelay);
-                    } else if (isCritical) {
-                        reject(`Erro ao baixar arquivo crítico ${url}: Código ${response.statusCode} após ${retries} tentativas`);
-                    } else {
-                        reject(`Erro ao baixar ${url}: Código ${response.statusCode}`);
-                    }
-                    return;
-                }
-                response.pipe(file);
-                
-                file.on('finish', () => {
-                    file.close();
-                    
-                    if (isCritical) {
-                        try {
-                            const stats = fs.statSync(tempDest);
-                            if (stats.size < 100) {
-                                console.error(`Arquivo crítico ${dest} parece estar corrompido (tamanho: ${stats.size} bytes).`);
-                                
-                                if (attemptNumber < retries) {
-                                    console.log(`Tentando novamente em ${retryDelay}ms...`);
-                                    setTimeout(() => download(attemptNumber + 1), retryDelay);
-                                    return;
-                                } else {
-                                    if(fs.existsSync(tempDest)) fs.unlinkSync(tempDest);
-                                    reject(`Erro: Arquivo crítico ${dest} parece estar corrompido após ${retries} tentativas.`);
-                                    return;
-                                }
-                            }
-                            
-                            if (fs.existsSync(dest)) {
-                                fs.unlinkSync(dest);
-                            }
-                            fs.renameSync(tempDest, dest);
-                            console.log(`Baixado e verificado: ${dest}`);
-                            resolve();
-                        } catch (err) {
-                            console.error(`Erro ao verificar arquivo crítico ${dest}: ${err.message}`);
-                            
-                            if (attemptNumber < retries) {
-                                console.log(`Tentando novamente em ${retryDelay}ms...`);
-                                setTimeout(() => download(attemptNumber + 1), retryDelay);
-                            } else {
-                                reject(`Erro ao verificar arquivo crítico ${dest}: ${err.message}`);
-                            }
-                        }
-                    } else {
-                        console.log(`Baixado: ${dest}`);
-                        resolve();
-                    }
-                });
-            }).on('error', (err) => {
+        const tempDest = isCritical ? `${dest}.temp` : dest;
+        const file = fs.createWriteStream(tempDest);
+        
+        const request = https.get(url, (response) => {
+            if (response.statusCode !== 200) {
                 file.close();
-                if(fs.existsSync(tempDest)) fs.unlink(tempDest, () => {});
+                try { if(fs.existsSync(tempDest)) fs.unlinkSync(tempDest); } catch {}
+                reject(new Error(`HTTP ${response.statusCode}`));
+                return;
+            }
+            
+            response.pipe(file);
+            
+            file.on('finish', () => {
+                file.close();
                 
-                if (isCritical && attemptNumber < retries) {
-                    console.log(`Tentativa ${attemptNumber} falhou com erro: ${err.message}. Tentando novamente em ${retryDelay}ms...`);
-                    setTimeout(() => download(attemptNumber + 1), retryDelay);
-                } else if (isCritical) {
-                    reject(`Erro ao baixar arquivo crítico ${url}: ${err.message} após ${retries} tentativas`);
+                if (isCritical) {
+                    try {
+                        const stats = fs.statSync(tempDest);
+                        if (stats.size < 100) {
+                            try { fs.unlinkSync(tempDest); } catch {}
+                            reject(new Error('Arquivo muito pequeno'));
+                            return;
+                        }
+                        
+                        if (fs.existsSync(dest)) {
+                            fs.unlinkSync(dest);
+                        }
+                        fs.renameSync(tempDest, dest);
+                        console.log(`Download crítico concluído: ${path.basename(dest)}`);
+                        resolve();
+                    } catch (err) {
+                        reject(new Error(`Erro ao verificar arquivo: ${err.message}`));
+                    }
                 } else {
-                    reject(`Erro ao baixar ${url}: ${err.message}`);
+                    console.log(`Download concluído: ${path.basename(dest)}`);
+                    resolve();
                 }
             });
-        };
+            
+            file.on('error', (err) => {
+                file.close();
+                try { if(fs.existsSync(tempDest)) fs.unlinkSync(tempDest); } catch {}
+                reject(err);
+            });
+        });
         
-        download(1);
+        request.on('error', (err) => {
+            file.close();
+            try { if(fs.existsSync(tempDest)) fs.unlinkSync(tempDest); } catch {}
+            reject(err);
+        });
+        
+        // Timeout simples
+        request.setTimeout(10000, () => {
+            request.destroy();
+            file.close();
+            try { if(fs.existsSync(tempDest)) fs.unlinkSync(tempDest); } catch {}
+            reject(new Error('Timeout'));
+        });
     });
 }
 
-// Função principal para excluir e baixar todos os arquivos
-async function deleteAndDownloadAll() {
-    await deleteFiles();
-    console.log('Iniciando downloads...');
-    
-    const criticalFiles = files.filter(file => file.critical);
-    const nonCriticalFiles = files.filter(file => !file.critical);
-    
-    let allCriticalDownloadsSucceeded = true;
-    for (const file of criticalFiles) {
+// Função para tentar download com retry simples
+async function tryDownload(url, dest, isCritical, fileName) {
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         try {
-            await downloadFile(file.url, file.dest, true, 3, 2000);
-        } catch (err) {
-            console.error(`ERRO CRÍTICO ao baixar ${path.basename(file.dest)} da URL principal: ${err}`);
-            console.log(`Ativando plano de contingência para ${path.basename(file.dest)}...`);
-            let success = false;
-            // 1. Tentar URLs de backup
-            if (file.backupUrls && file.backupUrls.length > 0) {
-                for (const backupUrl of file.backupUrls) {
-                    try {
-                        console.log(`Tentando baixar da URL de backup: ${backupUrl}`);
-                        await downloadFile(backupUrl, file.dest, true);
-                        console.log(`${path.basename(file.dest)} baixado com sucesso da URL de backup.`);
-                        success = true;
-                        break; 
-                    } catch (backupErr) {
-                        console.error(`Falha ao baixar da URL de backup ${backupUrl}:`, backupErr);
-                    }
-                }
-            }
-            // 2. Se todos os downloads falharam, restaurar do .bak
-            if (!success) {
-                console.log('Falha em todas as URLs. Tentando restaurar do backup local...');
-                const restored = restoreFileFromBackup(file.dest);
-                if (restored) {
-                    console.log(`Aplicação restaurada para ${path.basename(file.dest)} a partir do backup local.`);
-                    success = true;
-                } else {
-                    console.error(`FALHA CRÍTICA TOTAL: Não foi possível baixar ou restaurar o arquivo ${path.basename(file.dest)}!`);
-                    allCriticalDownloadsSucceeded = false;
-                }
+            console.log(`Tentando baixar ${fileName} - tentativa ${attempt}/${MAX_RETRIES}`);
+            await downloadFile(url, dest, isCritical);
+            return true;
+        } catch (error) {
+            console.error(`Tentativa ${attempt} falhou para ${fileName}: ${error.message}`);
+            if (attempt < MAX_RETRIES) {
+                await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
             }
         }
     }
+    return false;
+}
+
+// Função para verificar se é execução separada ou dentro da app
+function isStandaloneExecution() {
+    // Verifica se está sendo executado separadamente
+    return process.argv[1] && process.argv[1].includes('update-script') || 
+           process.argv0 === 'node' ||
+           !process.versions.electron;
+}
+
+// Função para executar a aplicação principal após o update
+function startMainApplication() {
+    console.log('\n🚀 Iniciando aplicação principal...');
     
-    if (allCriticalDownloadsSucceeded) {
-        if (nonCriticalFiles.length > 0) {
-            console.log('Arquivos críticos OK. Prosseguindo com os arquivos não críticos...');
-            for (const file of nonCriticalFiles) {
-                try {
-                    await downloadFile(file.url, file.dest, false);
-                } catch (err) {
-                    console.warn(`Aviso: Falha ao baixar arquivo não crítico: ${err}`);
-                }
+    try {
+        // Procurar pelo executável da aplicação
+        const possiblePaths = [
+            path.join(__dirname, '..', '..', '..', 'MultiPrime V5.exe'),
+            path.join(__dirname, '..', '..', 'MultiPrime V5.exe'),
+            path.join(process.cwd(), 'MultiPrime V5.exe')
+        ];
+        
+        let appPath = null;
+        for (const possiblePath of possiblePaths) {
+            if (fs.existsSync(possiblePath)) {
+                appPath = possiblePath;
+                break;
             }
         }
-        console.log('Todos os downloads foram concluídos.');
-        console.log('Removendo arquivos de backup...');
-        for (const file of files) {
-            if (file.critical) {
-                const backupPath = `${file.dest}.bak`;
-                if (fs.existsSync(backupPath)) {
-                    try {
-                        fs.unlinkSync(backupPath);
-                        console.log(`Arquivo de backup removido: ${backupPath}`);
-                    } catch (err) {
-                        console.warn(`Aviso: Não foi possível remover o arquivo de backup ${backupPath}: ${err.message}`);
-                    }
-                }
-            }
+        
+        if (appPath) {
+            console.log(`Executando: ${appPath}`);
+            spawn(appPath, [], { 
+                detached: true, 
+                stdio: 'ignore' 
+            }).unref();
+            console.log('✅ Aplicação principal iniciada!');
+        } else {
+            console.log('⚠️ Executável da aplicação não encontrado. Inicie manualmente.');
         }
-    } else {
-        console.error('Download abortado devido a falha crítica na obtenção de um ou mais arquivos essenciais.');
+    } catch (error) {
+        console.error('Erro ao iniciar aplicação principal:', error.message);
+        console.log('Por favor, inicie a aplicação manualmente.');
     }
 }
 
-// Executa o script
-deleteAndDownloadAll();
+// Função principal SIMPLIFICADA
+async function deleteAndDownloadAll() {
+    console.log('🔄 Iniciando processo de atualização...');
+    
+    // Fase 1: Limpeza
+    deleteFiles();
+    console.log('📥 Iniciando downloads...');
+    
+    // Fase 2: Downloads sequenciais
+    const results = [];
+    
+    for (const file of files) {
+        const fileName = path.basename(file.dest);
+        let success = false;
+        
+        // Tentar URL principal
+        success = await tryDownload(file.url, file.dest, file.critical, fileName);
+        
+        // Se falhou, tentar backups
+        if (!success && file.backupUrls) {
+            for (let i = 0; i < file.backupUrls.length; i++) {
+                console.log(`Tentando backup ${i + 1} para ${fileName}`);
+                success = await tryDownload(file.backupUrls[i], file.dest, file.critical, `${fileName} (backup)`);
+                if (success) break;
+            }
+        }
+        
+        // Se ainda falhou e é crítico, restaurar backup
+        if (!success && file.critical) {
+            console.log(`Tentando restaurar ${fileName} do backup local`);
+            success = restoreFileFromBackup(file.dest);
+        }
+        
+        results.push({ file: fileName, success, critical: file.critical });
+        
+        if (success) {
+            console.log(`✅ ${fileName} processado com sucesso`);
+        } else {
+            console.log(`❌ ${fileName} falhou em todas as tentativas`);
+        }
+    }
+    
+    // Fase 3: Relatório
+    console.log('\n📊 === RELATÓRIO ===');
+    let criticalFailures = 0;
+    let totalSuccess = 0;
+    
+    results.forEach(result => {
+        if (result.success) {
+            totalSuccess++;
+        } else if (result.critical) {
+            criticalFailures++;
+            console.log(`🚨 CRÍTICO FALHOU: ${result.file}`);
+        }
+    });
+    
+    console.log(`📈 Sucessos: ${totalSuccess}/${results.length}`);
+    
+    // Fase 4: Limpeza de backups (só se tudo deu certo)
+    if (criticalFailures === 0) {
+        console.log('🧹 Removendo arquivos de backup...');
+        for (const file of files) {
+            if (file.critical) {
+                const backupPath = `${file.dest}.bak`;
+                const tempPath = `${file.dest}.temp`;
+                
+                try {
+                    if (fs.existsSync(backupPath)) fs.unlinkSync(backupPath);
+                    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+                } catch (err) {
+                    console.warn(`⚠️ ${err.message}`);
+                }
+            }
+        }
+        console.log('✅ Processo concluído com sucesso!');
+        return true;
+    } else {
+        console.log(`⚠️ Processo concluído com ${criticalFailures} falha(s) crítica(s).`);
+        return false;
+    }
+}
+
+// Execução com proteção e controle de fluxo
+(async () => {
+    try {
+        // Se estiver executando separadamente, faz o update e inicia a app
+        if (isStandaloneExecution()) {
+            console.log('🔧 Executando em modo de atualização standalone...');
+            const success = await deleteAndDownloadAll();
+            
+            if (success) {
+                console.log('\n⏳ Aguardando 2 segundos antes de iniciar a aplicação...');
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                startMainApplication();
+            }
+            
+            console.log('🏁 Script de atualização finalizado.');
+            
+            // Aguardar um pouco antes de fechar
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            process.exit(0);
+        } 
+        // Se estiver dentro da app, só faz o update sem reiniciar
+        else {
+            console.log('🔧 Executando em modo de atualização interna...');
+            await deleteAndDownloadAll();
+            console.log('🏁 Atualização concluída. Aplicação continuará normalmente.');
+        }
+        
+    } catch (error) {
+        console.error('💥 Erro no processo:', error.message);
+        
+        // Recuperação simples: restaurar todos os backups críticos
+        console.log('🚨 Tentando recuperação de emergência...');
+        for (const file of files.filter(f => f.critical)) {
+            restoreFileFromBackup(file.dest);
+        }
+        
+        console.log('✅ Recuperação concluída.');
+    }
+})();
     electron_1.app.on('ready', () => {
         log.debug('ready');
         onReady().catch((err) => log.error('onReady ERROR', err));
@@ -12284,7 +12358,7 @@ async function uploadToGitHub(filePath, content, token, commitMessage = 'Atualiz
 }
 
 
-// ===== FUNÇÕES PRINCIPAIS (sem alterações) =====
+// ===== FUNÇÕES PRINCIPAIS =====
 async function limparParticoesAntigas() {
     const userDataPath = app.getPath('userData');
     const partitionsPath = path.join(userDataPath, 'Partitions');
@@ -12367,13 +12441,17 @@ ipcMain.on('abrir-navegador', async (event, perfil) => {
     const partition = `persist:${windowId}`;
     const isolatedSession = session.fromPartition(partition);
     let secureWindow = null;
+    
     try {
         if (!perfil || !perfil.link) throw new Error('Perfil ou link inválido.');
+
         console.log(`[SESSÃO ${windowId}] Limpando armazenamento prévio da sessão...`);
         await isolatedSession.clearStorageData();
+
         if (perfil.userAgent) {
             await isolatedSession.setUserAgent(perfil.userAgent);
         }
+
         let sessionData = null;
         if (perfil.ftp && perfil.senha) {
             try {
@@ -12387,11 +12465,13 @@ ipcMain.on('abrir-navegador', async (event, perfil) => {
                 console.error(`[SESSÃO ${windowId}] Falha ao buscar dados do GitHub:`, err.message);
             }
         }
+
         let cookiesToInject = [];
         if (sessionData) {
             if (Array.isArray(sessionData)) cookiesToInject = sessionData;
             else if (sessionData.cookies && Array.isArray(sessionData.cookies)) cookiesToInject = sessionData.cookies;
         }
+
         if (cookiesToInject.length > 0) {
             console.log(`[SESSÃO ${windowId}] Preparando para injetar ${cookiesToInject.length} cookie(s)...`);
             let successCount = 0, failureCount = 0;
@@ -12408,26 +12488,63 @@ ipcMain.on('abrir-navegador', async (event, perfil) => {
             console.log(`[SESSÃO ${windowId}] Injeção concluída. Sucesso: ${successCount}, Falhas: ${failureCount}`);
             await isolatedSession.cookies.flushStore();
         }
+
         const storageData = { localStorage: sessionData?.localStorage, sessionStorage: sessionData?.sessionStorage, indexedDB: sessionData?.indexedDB };
+
         ipcMain.once('request-session-data', (e) => {
             if (secureWindow && !secureWindow.isDestroyed() && e.sender === secureWindow.webContents) {
                 e.sender.send('inject-session-data', storageData);
             }
         });
+
         secureWindow = new BrowserWindow({
             ...CONFIG.WINDOW_DEFAULTS,
             frame: false, show: false,
             webPreferences: {
                 session: isolatedSession,
-                // MUITO IMPORTANTE: Garanta que o nome do arquivo aqui corresponde ao nome do seu preload
+																										  
                 preload: path.join(__dirname, 'preload-secure.js'), 
                 contextIsolation: true, nodeIntegration: false, devTools: true
             }
         });
+
         windowProfiles.set(secureWindow.webContents.id, perfil);
-        secureWindow.webContents.on('did-navigate', (e, url) => { if (secureWindow && !secureWindow.isDestroyed()) secureWindow.webContents.send('url-updated', url); });
-        
-        // >>> INÍCIO DA CORREÇÃO <<<
+
+        secureWindow.webContents.on('did-navigate', (e, url) => { 
+            if (secureWindow && !secureWindow.isDestroyed()) {
+                secureWindow.webContents.send('url-updated', url);
+            }
+        });
+
+        // ===== NOVO SISTEMA DE LOGIN AUTOMÁTICO =====
+        // Verifica se o perfil tem credenciais de login automático
+        if (perfil.usuariodaferramenta && perfil.senhadaferramenta) {
+            console.log(`[AUTO-LOGIN] Configurando login automático para: ${perfil.usuariodaferramenta}`);
+            
+            // Envia as credenciais para o preload script após a janela estar pronta
+            secureWindow.webContents.once('did-finish-load', () => {
+                if (secureWindow && !secureWindow.isDestroyed()) {
+                    console.log(`[AUTO-LOGIN] Enviando credenciais para preload script...`);
+                    secureWindow.webContents.send('set-auto-login-credentials', {
+                        usuariodaferramenta: perfil.usuariodaferramenta,
+                        senhadaferramenta: perfil.senhadaferramenta
+                    });
+                }
+            });
+
+            // Também envia quando há navegação para nova página
+            secureWindow.webContents.on('did-navigate', () => {
+                if (secureWindow && !secureWindow.isDestroyed()) {
+                    console.log(`[AUTO-LOGIN] Reenviando credenciais após navegação...`);
+                    secureWindow.webContents.send('set-auto-login-credentials', {
+                        usuariodaferramenta: perfil.usuariodaferramenta,
+                        senhadaferramenta: perfil.senhadaferramenta
+                    });
+                }
+            });
+        }
+
+        // Configuração do proxy (com correção para Envato)
         if (perfil.proxy?.host && perfil.proxy?.port) {
             const proxyValidation = validateProxyConfig(perfil.proxy);
             if (!proxyValidation.valid) {
@@ -12442,10 +12559,10 @@ ipcMain.on('abrir-navegador', async (event, perfil) => {
                     case 'http': case 'https': default: proxyRules = `http://${perfil.proxy.host}:${proxyValidation.port}`; break;
                 }
                 
-                // Esta é a regra de bypass. Adicionamos o servidor de download do Envato aqui.
+																								
                 const bypassRules = [
                     perfil.proxy.bypass || '',
-                    '*.envatousercontent.com' // Ignora o proxy para todos os subdomínios de download do Envato
+                    '*.envatousercontent.com'
                 ].filter(Boolean).join(',');
 
                 console.log(`[SESSÃO ${windowId}] Configurando proxy ${proxyType}: ${proxyRules}`);
@@ -12453,7 +12570,7 @@ ipcMain.on('abrir-navegador', async (event, perfil) => {
 
                 await isolatedSession.setProxy({ 
                     proxyRules: proxyRules, 
-                    proxyBypassRules: bypassRules // <-- A MÁGICA ACONTECE AQUI
+                    proxyBypassRules: bypassRules
                 });
 
                 if (perfil.proxy.username) {
@@ -12463,7 +12580,7 @@ ipcMain.on('abrir-navegador', async (event, perfil) => {
         } else {
             await isolatedSession.setProxy({ proxyRules: 'direct://' });
         }
-        // >>> FIM DA CORREÇÃO <<<
+									
 
         await setupDownloadManager(secureWindow, isolatedSession);
         secureWindow.once('ready-to-show', () => secureWindow.show());
@@ -12473,8 +12590,10 @@ ipcMain.on('abrir-navegador', async (event, perfil) => {
             windowProfiles.delete(secureWindow.webContents.id);
             secureWindow = null;
         });
+
         console.log(`[SISTEMA ${windowId}] Preparação concluída. Carregando URL...`);
         await secureWindow.loadURL(perfil.link);
+
     } catch (err) {
         console.error('--- [ERRO FATAL] Falha ao criar janela:', err);
         if (secureWindow && !secureWindow.isDestroyed()) secureWindow.destroy();
@@ -12489,7 +12608,7 @@ function findUniquePath(proposedPath) {
     return newPath;
 }
 
-// O resto do arquivo (setupDownloadManager, IPCs, etc.) permanece exatamente o mesmo
+																					 
 async function setupDownloadManager(win, isolatedSession) {
     isolatedSession.on('will-download', (event, item) => {
         if (win.isDestroyed()) {
@@ -12551,10 +12670,12 @@ ipcMain.on('navigate-back', e => { const wc = getWindowFromEvent(e)?.webContents
 ipcMain.on('navigate-forward', e => { const wc = getWindowFromEvent(e)?.webContents; if (wc?.canGoForward()) wc.goForward(); });
 ipcMain.on('navigate-reload', e => getWindowFromEvent(e)?.webContents.reload());
 ipcMain.on('navigate-to-url', (event, url) => { const wc = getWindowFromEvent(event)?.webContents; if (wc && url) wc.loadURL(url); });
+
 ipcMain.on('initiate-full-session-export', async (event, storageData) => {
     const window = BrowserWindow.fromWebContents(event.sender);
     if (!window || window.isDestroyed()) return;
     const perfil = windowProfiles.get(window.webContents.id);
+    
     try {
         const currentSession = window.webContents.session;
         const cookies = await currentSession.cookies.get({});
@@ -12567,6 +12688,7 @@ ipcMain.on('initiate-full-session-export', async (event, storageData) => {
             indexedDB: storageData.indexedDBData
         };
         const jsonContent = JSON.stringify(fullSessionData, null, 4);
+        
         if (perfil && perfil.ftp && perfil.senha) {
             console.log(`[EXPORTAÇÃO] Iniciando upload da sessão para GitHub: ${perfil.ftp}`);
             try {
