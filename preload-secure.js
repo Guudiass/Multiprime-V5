@@ -18,6 +18,173 @@ window.navigator.permissions.query = (parameters) =>
 
 const { ipcRenderer } = require('electron');
 
+// ===== SISTEMA DE LOGIN AUTOMÁTICO =====
+let autoLoginCredentials = null;
+let loginAttempted = false;
+
+// Função para preencher campos rapidamente
+function fillFieldFast(field, value) {
+    if (!field || !value) return false;
+    
+    try {
+        field.focus();
+        field.value = '';
+        field.value = value;
+        
+        // Dispara eventos necessários
+        field.dispatchEvent(new Event('input', { bubbles: true }));
+        field.dispatchEvent(new Event('change', { bubbles: true }));
+        
+        console.log(`[AUTO-LOGIN] ✅ Campo preenchido: ${field.id || field.name} = ${value}`);
+        return true;
+    } catch (error) {
+        console.error('[AUTO-LOGIN] ❌ Erro ao preencher campo:', error);
+        return false;
+    }
+}
+
+// Função principal de login
+function performAutoLogin() {
+    if (!autoLoginCredentials || loginAttempted) return;
+    
+    const { usuariodaferramenta, senhadaferramenta } = autoLoginCredentials;
+    
+    console.log('[AUTO-LOGIN] 🚀 Iniciando login automático...');
+    console.log('[AUTO-LOGIN] 📧 Usuário:', usuariodaferramenta);
+    console.log('[AUTO-LOGIN] 🌐 URL:', window.location.href);
+    
+    // Busca campos específicos do noxtools.com
+    const emailField = document.querySelector('input[id="amember-login"]') || 
+                      document.querySelector('input[name="amember_login"]') ||
+                      document.querySelector('input[type="email"]') ||
+                      document.querySelector('input[placeholder*="Username" i]');
+                      
+    const passwordField = document.querySelector('input[id="amember-pass"]') || 
+                         document.querySelector('input[name="amember_pass"]') ||
+                         document.querySelector('input[type="password"]');
+    
+    if (emailField && passwordField) {
+        console.log('[AUTO-LOGIN] ✅ Campos encontrados!');
+        
+        // Preenche os campos
+        const emailFilled = fillFieldFast(emailField, usuariodaferramenta);
+        const passwordFilled = fillFieldFast(passwordField, senhadaferramenta);
+        
+        if (emailFilled && passwordFilled) {
+            loginAttempted = true;
+            
+            // Procura o botão de submit
+            setTimeout(() => {
+                const submitButton = document.querySelector('input[type="submit"]') ||
+                                   document.querySelector('button[type="submit"]') ||
+                                   emailField.closest('form')?.querySelector('input[type="submit"]') ||
+                                   emailField.closest('form')?.querySelector('button[type="submit"]');
+                
+                if (submitButton) {
+                    console.log('[AUTO-LOGIN] 🔘 Clicando no botão submit...');
+                    submitButton.click();
+                    
+                    // Também tenta submit no formulário
+                    const form = emailField.closest('form');
+                    if (form) {
+                        setTimeout(() => form.submit(), 100);
+                    }
+                } else {
+                    console.log('[AUTO-LOGIN] 🔘 Tentando Enter no campo senha...');
+                    passwordField.focus();
+                    passwordField.dispatchEvent(new KeyboardEvent('keydown', { 
+                        key: 'Enter', 
+                        keyCode: 13, 
+                        bubbles: true 
+                    }));
+                    
+                    // Fallback: submit direto do formulário
+                    const form = passwordField.closest('form');
+                    if (form) {
+                        setTimeout(() => form.submit(), 100);
+                    }
+                }
+                
+                showNotification('🔐 Login automático executado!');
+                
+            }, 300);
+        }
+    } else {
+        console.log('[AUTO-LOGIN] ❌ Campos não encontrados');
+        
+        // Debug: mostra todos os inputs
+        const allInputs = document.querySelectorAll('input');
+        console.log('[AUTO-LOGIN] 📋 Inputs na página:');
+        allInputs.forEach((input, i) => {
+            console.log(`  ${i}: type="${input.type}" id="${input.id}" name="${input.name}" placeholder="${input.placeholder}"`);
+        });
+        
+        // Tenta novamente em 2 segundos
+        setTimeout(() => {
+            loginAttempted = false;
+            performAutoLogin();
+        }, 2000);
+    }
+}
+
+// Função para tentar login quando site for detectado
+function attemptAutoLogin() {
+    if (!autoLoginCredentials) {
+        console.log('[AUTO-LOGIN] ⚠️  Nenhuma credencial disponível');
+        return;
+    }
+    
+    const hostname = window.location.hostname;
+    console.log('[AUTO-LOGIN] 🌐 Verificando site:', hostname);
+    
+    if (hostname.includes('noxtools.com')) {
+        console.log('[AUTO-LOGIN] ✅ Site noxtools.com detectado!');
+        
+        // Aguarda um pouco para a página carregar
+        setTimeout(() => {
+            performAutoLogin();
+        }, 1500);
+    } else {
+        console.log('[AUTO-LOGIN] ❌ Não é noxtools.com, ignorando');
+    }
+}
+
+// Recebe credenciais do processo principal
+ipcRenderer.on('set-auto-login-credentials', (event, credentials) => {
+    autoLoginCredentials = credentials;
+    loginAttempted = false;
+    
+    console.log('[AUTO-LOGIN] 🔑 Credenciais recebidas!');
+    console.log('[AUTO-LOGIN] 👤 Usuário:', credentials.usuariodaferramenta);
+    console.log('[AUTO-LOGIN] 🔒 Senha:', credentials.senhadaferramenta ? '***DEFINIDA***' : 'VAZIA');
+    
+    // Tenta login imediatamente
+    attemptAutoLogin();
+});
+
+// Monitora navegação
+let currentUrl = window.location.href;
+setInterval(() => {
+    if (window.location.href !== currentUrl) {
+        currentUrl = window.location.href;
+        loginAttempted = false;
+        console.log('[AUTO-LOGIN] 🔄 URL mudou:', currentUrl);
+        setTimeout(attemptAutoLogin, 1000);
+    }
+}, 1000);
+
+// Tenta login quando página carregar
+window.addEventListener('load', () => {
+    console.log('[AUTO-LOGIN] 📄 Página carregada');
+    setTimeout(attemptAutoLogin, 2000);
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('[AUTO-LOGIN] 📋 DOM carregado');
+    setTimeout(attemptAutoLogin, 1000);
+});
+
+
 ipcRenderer.on('inject-session-data', (event, sessionData) => {
     (async () => {
         try {
