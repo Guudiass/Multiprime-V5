@@ -11686,9 +11686,6 @@ module.exports = require("net");
 /******/ 	var __webpack_exports__ = __webpack_require__(0);
 /******/ 	
 /******/ })()
-// ===================================================================
-// PARTE 1: IMPORTS PRINCIPAIS (Electron, path, fs, https, etc.)
-// ===================================================================
 const { app, BrowserWindow, ipcMain, session, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -11831,6 +11828,19 @@ function startApp() {
     
     const proxyCredentials = new Map();
     const windowProfiles = new Map();
+
+    // [FIX] Helper para evitar "Object has been destroyed"
+    function withAlive(win, fn) {
+        try { if (win && !win.isDestroyed()) fn(win); } catch (_) {}
+    }
+
+    // [FIX] Helper para identificar abortos não-fatais de navegação
+    function isAbortError(errOrCode) {
+        if (typeof errOrCode === 'number') return errOrCode === -3;
+        if (!errOrCode) return false;
+        // Electron geralmente fornece .code ('ERR_ABORTED') e .errno (-3)
+        return errOrCode.code === 'ERR_ABORTED' || errOrCode.errno === -3 || errOrCode.errorCode === -3;
+    }
     
     const nossoManipuladorDeLogin = (event, webContents, request, authInfo, callback) => {
         if (!authInfo.isProxy) { 
@@ -12225,11 +12235,18 @@ function startApp() {
             });
     
             windowProfiles.set(secureWindow.webContents.id, perfil);
+
+            // [FIX] Ignorar naveg. abortadas (ex.: usuário digita e dá Enter)
+            secureWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+                if (isAbortError(errorCode)) {
+                    // Navegação interrompida por outra navegação -> normal; não fechar/derrubar UI
+                    return;
+                }
+                console.error('[NAV] did-fail-load:', errorCode, errorDescription, validatedURL);
+            });
     
             secureWindow.webContents.on('did-navigate', (e, url) => { 
-                if (secureWindow && !secureWindow.isDestroyed()) {
-                    secureWindow.webContents.send('url-updated', url);
-                }
+                withAlive(secureWindow, (w) => w.webContents.send('url-updated', url));
             });
     
             // ===== NOVO SISTEMA DE LOGIN AUTOMÁTICO =====
@@ -12237,13 +12254,13 @@ function startApp() {
                 console.log(`[AUTO-LOGIN] Configurando login automático para: ${perfil.usuariodaferramenta}`);
                 
                 const sendCredentials = () => {
-                    if (secureWindow && !secureWindow.isDestroyed()) {
+                    withAlive(secureWindow, (w) => {
                         console.log(`[AUTO-LOGIN] Enviando credenciais para preload script...`);
-                        secureWindow.webContents.send('set-auto-login-credentials', {
+                        w.webContents.send('set-auto-login-credentials', {
                             usuariodaferramenta: perfil.usuariodaferramenta,
                             senhadaferramenta: perfil.senhadaferramenta
                         });
-                    }
+                    });
                 };
 
                 secureWindow.webContents.once('did-finish-load', sendCredentials);
@@ -12297,7 +12314,17 @@ function startApp() {
             });
     
             console.log(`[SISTEMA ${windowId}] Preparação concluída. Carregando URL...`);
-            await secureWindow.loadURL(perfil.link);
+            // [FIX] Ignorar rejeição de loadURL quando for ERR_ABORTED (-3)
+            try {
+                await secureWindow.loadURL(perfil.link);
+            } catch (err) {
+                if (isAbortError(err)) {
+                    // navegação inicial foi abortada por outra navegação rápida -> ok
+                    console.warn('[NAV] loadURL abortado por navegação subsequente (ok).');
+                } else {
+                    throw err;
+                }
+            }
     
         } catch (err) {
             console.error('--- [ERRO FATAL] Falha ao criar janela:', err);
