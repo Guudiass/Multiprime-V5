@@ -495,7 +495,7 @@ console.log('%c[PRELOAD SCRIPT VFINAL] Notificação Corrigida!', 'color: #00FF0
 
         // --- Lógica Geral para outros sites (inalterada) ---
         
-        const allowedHostnames = ['canva.com', 'placeit.net', 'hailuoai.video', 'vectorizer.ai'];
+        const allowedHostnames = ['canva.com', 'placeit.net', 'hailuoai.video', 'vectorizer.ai', 'gamma.app'];
         const isSiteAllowed = allowedHostnames.some(hostname => currentHostname.includes(hostname));
 
         if (isSiteAllowed) {
