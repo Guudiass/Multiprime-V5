@@ -13,40 +13,73 @@ const WATCHDOG_MS = 1000; // reinjeção/garantia de visibilidade
 // ===================================================================
 let autoLoginCredentials = null;
 
+// Função reutilizável para injetar dados de sessão
+function injectSessionData(data, { source = 'async' } = {}) {
+  try {
+    console.log(`[PRELOAD] Injetando dados de sessão (${source})`, {
+      hasLocalStorage: !!data?.localStorage,
+      hasSessionStorage: !!data?.sessionStorage,
+      hasIndexedDB: !!data?.indexedDB
+    });
+
+    // Injetar localStorage
+    if (data?.localStorage) {
+      try {
+        Object.entries(data.localStorage).forEach(([k, v]) => localStorage.setItem(k, v));
+      } catch (err) {
+        console.error('[PRELOAD] Erro localStorage:', err);
+      }
+    }
+
+    // Injetar sessionStorage
+    if (data?.sessionStorage) {
+      try {
+        Object.entries(data.sessionStorage).forEach(([k, v]) => sessionStorage.setItem(k, v));
+      } catch (err) {
+        console.error('[PRELOAD] Erro sessionStorage:', err);
+      }
+    }
+
+    // IndexedDB (placeholder controlado no main; aqui somente log)
+    if (data?.indexedDB) {
+      console.log('[PRELOAD] IndexedDB data recebido (placeholder)');
+    }
+  } catch (e) {
+    console.warn('[PRELOAD] Falha ao injetar dados de sessão:', e);
+  }
+}
+
+// 🔸 INJEÇÃO ANTECIPADA (IPC síncrono) — roda o quanto antes no preload
+(() => {
+  try {
+    const initialData = ipcRenderer.sendSync('get-initial-session-data'); // <— síncrono
+    if (initialData && typeof initialData === 'object') {
+      injectSessionData(initialData, { source: 'sync' });
+    } else {
+      console.log('[PRELOAD] Sem dados de sessão síncronos ou payload inválido.');
+    }
+  } catch (e) {
+    console.warn('[PRELOAD] Erro no sendSync(get-initial-session-data):', e);
+  }
+})();
+
+// Listener para credenciais de auto-login
 ipcRenderer.on('set-auto-login-credentials', (event, credentials) => {
   console.log('[AUTO-LOGIN] Credenciais recebidas no preload');
   autoLoginCredentials = credentials;
   if (document.readyState === 'complete') setTimeout(() => tryAutoFillLogin(), 500);
 });
 
+// Mantém fallback assíncrono (para casos em que o sync não retorne tudo)
 window.addEventListener('DOMContentLoaded', () => {
-  console.log('[PRELOAD] DOM Carregado. Solicitando dados de sessão...');
+  console.log('[PRELOAD] DOM Carregado. (fallback) solicitando dados de sessão por IPC async…');
   ipcRenderer.send('request-session-data');
   if (autoLoginCredentials) setTimeout(() => tryAutoFillLogin(), 1000);
 });
 
+// Recebe injeção via canal assíncrono também (reuso de função)
 ipcRenderer.on('inject-session-data', (event, data) => {
-  console.log('[PRELOAD] Dados de sessão recebidos:', {
-    hasLocalStorage: !!data?.localStorage,
-    hasSessionStorage: !!data?.sessionStorage,
-    hasIndexedDB: !!data?.indexedDB
-  });
-
-  if (data?.localStorage) {
-    try {
-      Object.entries(data.localStorage).forEach(([k, v]) => localStorage.setItem(k, v));
-      console.log('[PRELOAD] localStorage injetado');
-    } catch (err) { console.error('[PRELOAD] Erro localStorage:', err); }
-  }
-  if (data?.sessionStorage) {
-    try {
-      Object.entries(data.sessionStorage).forEach(([k, v]) => sessionStorage.setItem(k, v));
-      console.log('[PRELOAD] sessionStorage injetado');
-    } catch (err) { console.error('[PRELOAD] Erro sessionStorage:', err); }
-  }
-  if (data?.indexedDB) {
-    console.log('[PRELOAD] IndexedDB data recebido (placeholder)');
-  }
+  injectSessionData(data, { source: 'async' });
 });
 
 // ===================================================================
@@ -98,10 +131,7 @@ function tryAutoFillLogin() {
       'button[name*="login" i]',
       'button[id*="login" i]'
     ];
-    for (const s of btns) {
-      const b = document.querySelector(s);
-      if (b && b.offsetParent !== null) { b.click(); break; }
-    }
+    for (const s of btns) { const b = document.querySelector(s); if (b && b.offsetParent !== null) { b.click(); break; } }
   }, 400);
 }
 
@@ -110,14 +140,13 @@ const loginObserver = new MutationObserver(() => {
 });
 
 // ===================================================================
-// UI DO NAVEGADOR (Barra + Downloads compacto + Toast + Watchdog)
+// UI DO NAVEGADOR (Barra + Downloads + Toast + Watchdog)
 // ===================================================================
 function injectBrowserUI() {
   if (document.getElementById(UI_ID)) return;
 
   const uiContainer = document.createElement('div');
   uiContainer.id = UI_ID;
-  // força visibilidade caso a página injete estilos agressivos
   uiContainer.style.display = 'block';
   uiContainer.style.visibility = 'visible';
 
@@ -177,6 +206,8 @@ function injectBrowserUI() {
   const styles = document.createElement('style');
   styles.textContent = `
     #${UI_ID}, #${UI_ID} * { box-sizing: border-box; }
+    :root { --mp-offset: ${TOOLBAR_HEIGHT}px; }
+
     #${UI_ID} {
       position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important;
       z-index: 2147483647 !important;
@@ -243,12 +274,8 @@ function injectBrowserUI() {
       margin-left: 8px; border-radius: 10px; font-size: 11px; font-weight: 600;
       background: #0a84ff; color: #fff;
     }
-
     /* Destaque extra quando o HISTÓRICO estiver aberto */
-    #mp-downloads-btn[data-history-open="true"] {
-      background: rgba(255,255,255,0.16);
-      border-color: rgba(255,255,255,0.28);
-    }
+    #mp-downloads-btn[data-history-open="true"] { background: rgba(255,255,255,0.16); border-color: rgba(255,255,255,0.28); }
 
     #mp-window-controls { display:flex; align-items:center; gap: 2px; margin-left: 4px; }
     .mp-win-btn {
@@ -280,7 +307,7 @@ function injectBrowserUI() {
     .mp-download-info { flex:1; min-width:0; }
     .mp-download-name { color:#fff; font-size: 12px; font-weight:500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .mp-download-progress { display:flex; align-items:center; gap:6px; margin-top:4px; }
-    .mp-progress-bar { flex:1; height:3px; background:#2a2aa; border-radius:2px; overflow:hidden; }
+    .mp-progress-bar { flex:1; height:3px; background:#2a2a2a; border-radius:2px; overflow:hidden; }
     .mp-progress-fill { height:100%; background: linear-gradient(90deg,#0a84ff 0%, #00d4ff 100%); transition: width .2s ease; border-radius:2px; }
     .mp-progress-text { color:#8a8a8a; font-size: 10px; min-width: 36px; text-align: right; }
     .mp-download-actions { display:flex; gap:6px; }
@@ -291,15 +318,20 @@ function injectBrowserUI() {
     }
     .mp-download-action:hover { background: #3a3a3a; border-color:#0a84ff; }
 
-    html { margin:0 !important; padding:0 !important; }
+    html { margin:0 !important; padding:0 !important; scroll-padding-top: var(--mp-offset) !important; }
     body {
       margin: 0 !important;
       padding-top: ${TOOLBAR_HEIGHT}px !important;
-      min-height: 100vh !important;
+      padding-bottom: max(env(safe-area-inset-bottom, 0px), 24px) !important;
+      min-height: calc(100vh - var(--mp-offset)) !important;
       box-sizing: border-box !important;
     }
+    html, body { overflow-y: auto !important; }
 
-    /* TOAST */
+    *[style*="100vh"], *[style*="100dvh"], *[style*="100svh"], *[style*="100lvh"] {
+      min-height: calc(100vh - var(--mp-offset)) !important;
+    }
+
     #mp-toast-container {
       position: fixed; right: 16px; bottom: 16px; z-index: 2147483648;
       display: flex; flex-direction: column; gap: 8px; pointer-events: none;
@@ -319,7 +351,6 @@ function injectBrowserUI() {
     button:focus, input:focus { outline: 2px solid #0a84ff44; outline-offset: 2px; }
   `;
 
-  // Injeta
   (document.head || document.documentElement).appendChild(styles);
   (document.body || document.documentElement).prepend(uiContainer);
 
@@ -329,19 +360,23 @@ function injectBrowserUI() {
   if (document.body) {
     loginObserver.observe(document.body, { childList: true, subtree: true });
   }
+
+  // Correções de corte inferior e listeners
+  applyBottomSafePatch();
+  window.addEventListener('resize', debounce(applyBottomSafePatch, 120), { passive: true });
+  window.addEventListener('orientationchange', () => setTimeout(applyBottomSafePatch, 150), { passive: true });
 }
 
-// Watchdog: garante que a barra permaneça visível e reinjeta se sumir
+// Watchdog
 let watchdogTimer = null;
 function startUIWatchdog() {
   if (watchdogTimer) return;
   watchdogTimer = setInterval(() => {
     const el = document.getElementById(UI_ID);
-    if (!el || el.style.display === 'none' || getComputedStyle(el).display === 'none') {
+    if (!el || getComputedStyle(el).display === 'none') {
       console.warn('[UI] Watchdog: reinjetando barra...');
       injectBrowserUI();
     } else {
-      // força visibilidade
       el.style.display = 'block';
       el.style.visibility = 'visible';
     }
@@ -375,7 +410,7 @@ function setupBrowserUIEvents() {
       if (!mgr) return;
       const active = mgr.classList.toggle('active');
       downloadsBtn.setAttribute('aria-pressed', String(active));
-      if (active) toggleHistory(false); // alterna para lista ao vivo ao abrir por aqui
+      if (active) toggleHistory(false);
     });
   }
 
@@ -409,6 +444,8 @@ ipcRenderer.on('url-updated', (event, url) => {
   } catch {
     if (lock) lock.textContent = '⚠️';
   }
+
+  applyBottomSafePatch();
 });
 
 // ===================================================================
@@ -461,11 +498,6 @@ function renderHistory() {
   });
 }
 
-/**
- * Alterna entre exibir o histórico e a lista ao vivo.
- * Também marca o botão com data-history-open="true" quando o HISTÓRICO está aberto,
- * deixando-o destacado conforme a regra CSS.
- */
 function toggleHistory(show) {
   const historyEl    = document.getElementById('mp-download-history');
   const liveEl       = document.getElementById('mp-download-live-list');
@@ -480,10 +512,9 @@ function toggleHistory(show) {
   liveEl.style.display    = willShow ? 'none'  : 'block';
   if (clearBtn) clearBtn.style.display = willShow ? 'inline-block' : 'none';
 
-  if (mgr) mgr.classList.add('active'); // manter painel visível
+  if (mgr) mgr.classList.add('active');
 
   if (downloadsBtn) {
-    // Destaque extra somente quando HISTÓRICO estiver aberto
     downloadsBtn.setAttribute('data-history-open', String(willShow));
     if (willShow) downloadsBtn.setAttribute('aria-pressed', 'true');
   }
@@ -633,7 +664,7 @@ function sanitizeText(str) {
 }
 
 // ===================================================================
-// ANTI-SOBREPOSIÇÃO (headers/modais fixed/sticky)
+// ANTI-SOBREPOSIÇÃO (headers/modais fixed/sticky) — top only
 // ===================================================================
 (() => {
   const OFFSET = TOOLBAR_HEIGHT;
@@ -645,14 +676,21 @@ function sanitizeText(str) {
 
   function bump(el) {
     if (shouldSkip(el) || adjusted.has(el)) return;
-    const cs = getComputedStyle(el), pos = cs.position;
+    const cs = getComputedStyle(el);
+    const pos = cs.position;
     if (pos !== 'fixed' && pos !== 'sticky') return;
-    const topStr = cs.top, topIsAuto = topStr === 'auto', topPx = topIsAuto ? NaN : parseFloat(topStr || '0');
-    const usesInsetZero = (cs.top === '0px' && cs.left === '0px' && cs.right === '0px') || (cs.bottom === '0px' && cs.left === '0px' && cs.right === '0px');
-    const collides = (!isNaN(topPx) && topPx <= OFFSET + 0.5) || (pos === 'sticky' && (topIsAuto || topStr === '0px'));
-    if (collides || usesInsetZero) {
-      if (!isNaN(topPx)) el.style.top = (topPx + OFFSET) + 'px';
-      else {
+
+    // Ajuste apenas para colisões superiores
+    const topStr = cs.top;
+    const topIsAuto = topStr === 'auto';
+    const topPx = topIsAuto ? NaN : parseFloat(topStr || '0');
+    const collidesByTop = (!isNaN(topPx) && topPx <= OFFSET + 0.5) || (pos === 'sticky' && (topIsAuto || topStr === '0px'));
+    const isBottomAnchored = cs.bottom === '0px'; // não mexer em footers
+
+    if (collidesByTop && !isBottomAnchored) {
+      if (!isNaN(topPx)) {
+        el.style.top = (topPx + OFFSET) + 'px';
+      } else {
         const t = cs.transform === 'none' ? '' : cs.transform;
         el.style.transform = `translateY(${OFFSET}px) ${t.includes('matrix') || t.includes('translate') ? '' : t}`.trim();
         el.style.willChange = 'transform';
@@ -692,38 +730,86 @@ function sanitizeText(str) {
 })();
 
 // ===================================================================
+// PATCH CONTRA “CORTE” INFERIOR (Bottom-Safe)
+// ===================================================================
+function applyBottomSafePatch() {
+  try {
+    const doc = document.documentElement;
+    const body = document.body || document.documentElement;
+
+    const scrollH = doc.scrollHeight;
+    const innerH  = window.innerHeight;
+    const cssHtml = getComputedStyle(doc);
+    const cssBody = getComputedStyle(body);
+    const overflowLocked = (cssHtml.overflowY === 'hidden' || cssBody.overflowY === 'hidden');
+
+    if (overflowLocked && scrollH > innerH + 4) {
+      doc.style.overflowY = 'auto';
+      body.style.overflowY = 'auto';
+    }
+
+    body.style.minHeight = `calc(100vh - ${TOOLBAR_HEIGHT}px)`;
+
+    const existingPB = parseInt(cssBody.paddingBottom || '0', 10) || 0;
+    if (existingPB < 24) body.style.paddingBottom = `max(env(safe-area-inset-bottom, 0px), 24px)`;
+
+    document.querySelectorAll('*[style*="100vh"], *[style*="100dvh"], *[style*="100svh"], *[style*="100lvh"]').forEach(el => {
+      if (el.id && (el.id.includes('modal') || el.id.includes('dialog'))) return;
+      el.style.minHeight = `calc(100vh - ${TOOLBAR_HEIGHT}px)`;
+    });
+
+  } catch (e) {
+    console.warn('[BottomSafe] falha ao aplicar patch:', e);
+  }
+}
+
+function debounce(fn, ms) {
+  let t = null;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
+
+// ===================================================================
 // INICIALIZAÇÃO + WATCHDOG
 // ===================================================================
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => { injectBrowserUI(); startUIWatchdog(); }, { once: true });
-else { injectBrowserUI(); startUIWatchdog(); }
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => { injectBrowserUI(); startUIWatchdog(); }, { once: true });
+} else {
+  injectBrowserUI(); startUIWatchdog();
+}
 window.addEventListener('load', () => {
   if (!document.getElementById(UI_ID)) injectBrowserUI();
+  applyBottomSafePatch();
 });
 
 // ===================================================================
 // API EXPOSTA
 // ===================================================================
 contextBridge.exposeInMainWorld('electronAPI', {
+  // Navegação
   navigateBack:   () => ipcRenderer.send('navigate-back'),
   navigateForward:() => ipcRenderer.send('navigate-forward'),
   navigateReload: () => ipcRenderer.send('navigate-reload'),
   navigateToUrl:  (url) => ipcRenderer.send('navigate-to-url', url),
 
+  // Janela
   minimizeWindow: () => ipcRenderer.send('minimize-secure-window'),
   maximizeWindow: () => ipcRenderer.send('maximize-secure-window'),
   closeWindow:    () => ipcRenderer.send('close-secure-window'),
 
-  openDownload:           (path) => ipcRenderer.send('open-download', path),
-  showDownloadInFolder:   (path) => ipcRenderer.send('show-download-in-folder', path),
+  // Downloads
+  openDownload:         (path) => ipcRenderer.send('open-download', path),
+  showDownloadInFolder: (path) => ipcRenderer.send('show-download-in-folder', path),
 
+  // Histórico de downloads
   getDownloadHistory:   () => loadDownloadHistory(),
   clearDownloadHistory: () => { saveDownloadHistory([]); renderHistory(); },
   showDownloadHistory:  () => { const mgr = document.getElementById('mp-download-manager'); if (mgr) mgr.classList.add('active'); toggleHistory(true); },
 
+  // Listeners
   onUrlUpdated:       (cb) => ipcRenderer.on('url-updated', (e, url) => cb(url)),
   onDownloadStarted:  (cb) => ipcRenderer.on('download-started', (e, d) => cb(d)),
   onDownloadProgress: (cb) => ipcRenderer.on('download-progress', (e, d) => cb(d)),
   onDownloadComplete: (cb) => ipcRenderer.on('download-complete', (e, d) => cb(d))
 });
 
-console.log('[PRELOAD-SECURE] Preload script carregado e watchdog ativo! 🚀');
+console.log('[PRELOAD-SECURE] Injeção síncrona de sessão ativa. Sem auto-refresh. 🚀');
