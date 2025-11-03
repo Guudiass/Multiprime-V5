@@ -12340,13 +12340,14 @@ function startApp() {
         return newPath;
     }
     
-                                                                                        
+    // ===================== ALTERAÇÃO ÚNICA: permitir o usuário escolher onde salvar =====================
     async function setupDownloadManager(win, isolatedSession) {
-        isolatedSession.on('will-download', (event, item) => {
+        isolatedSession.on('will-download', async (event, item) => {
             if (win.isDestroyed()) {
                 return item.cancel();
             }
-    
+
+            // Nome sugerido pelo servidor (fallback simples caso não exista)
             let filename = item.getFilename();
             if (!filename) {
                 const mimeType = item.getMimeType();
@@ -12358,16 +12359,30 @@ function startApp() {
                 filename = `download-${Date.now()}${extension}`;
                 console.log(`[DOWNLOAD] Nome de arquivo ausente. Gerado nome fallback: ${filename} (MIME: ${mimeType})`);
             }
-            
-            const uniquePath = findUniquePath(path.join(app.getPath('downloads'), filename));
-            item.setSavePath(uniquePath);
-            
+
+            // Abre diálogo "Salvar como..." para o usuário escolher a pasta/arquivo
+            const defaultPath = findUniquePath(path.join(app.getPath('downloads'), filename));
+            const { canceled, filePath } = await dialog.showSaveDialog(BrowserWindow.fromWebContents(win.webContents), {
+                title: 'Salvar arquivo',
+                defaultPath,
+                buttonLabel: 'Salvar'
+                // (Opcional) filters: [{ name: 'Todos os arquivos', extensions: ['*'] }]
+            });
+
+            if (canceled || !filePath) {
+                console.log('[DOWNLOAD] Usuário cancelou a escolha do caminho. Cancelando download.');
+                return item.cancel();
+            }
+
+            // Define explicitamente o caminho escolhido
+            item.setSavePath(filePath);
+
             const downloadId = `download-${crypto.randomUUID()}`;
-            win.webContents.send('download-started', { id: downloadId, filename: path.basename(uniquePath) });
-            
+            win.webContents.send('download-started', { id: downloadId, filename: path.basename(filePath) });
+
             let lastProgress = 0, lastUpdateTime = 0;
             const THROTTLE_INTERVAL = 250;
-            
+
             item.on('updated', (e, state) => {
                 if (win.isDestroyed() || state !== 'progressing' || item.getTotalBytes() <= 0) return;
                 const progress = Math.round((item.getReceivedBytes() / item.getTotalBytes()) * 100);
@@ -12377,7 +12392,7 @@ function startApp() {
                     lastProgress = progress; lastUpdateTime = now;
                 }
             });
-            
+
             item.on('done', (e, state) => {
                 if (win.isDestroyed()) return;
                 const finalProgress = state === 'completed' ? 100 : (item.getTotalBytes() > 0 ? Math.round((item.getReceivedBytes() / item.getTotalBytes()) * 100) : lastProgress);
@@ -12385,7 +12400,8 @@ function startApp() {
             });
         });
     }
-    
+    // ================================================================================================
+
     function getWindowFromEvent(event) {
         const window = BrowserWindow.fromWebContents(event.sender);
         if (!window || window.isDestroyed()) return null;
@@ -12526,5 +12542,6 @@ async function initialize() {
 
 // PONTO DE ENTRADA: AQUI TUDO COMEÇA!
 initialize();
+
 ;
 //# sourceMappingURL=main.js.map

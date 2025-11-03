@@ -1,703 +1,729 @@
-// preload-secure.js
+/* eslint-disable no-undef */
+const { contextBridge, ipcRenderer } = require('electron');
 
-// =====================
-// Camuflagem Anti-Detecção de Bots (conservador, sem mexer no UA)
-// =====================
-Object.defineProperty(navigator, 'webdriver', { get: () => false });
+// ===================================================================
+// CONFIGURAÇÕES GERAIS
+// ===================================================================
+const TOOLBAR_HEIGHT = 44; // altura da barra (px)
+const UI_ID = 'multiprime-browser-ui';
+const WATCHDOG_MS = 1000; // reinjeção/garantia de visibilidade
 
-Object.defineProperty(navigator, 'plugins', {
-  get: () => [
-    { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
-    { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
-    { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
-  ],
+// ===================================================================
+// SISTEMA DE INJEÇÃO DE SESSÃO
+// ===================================================================
+let autoLoginCredentials = null;
+
+ipcRenderer.on('set-auto-login-credentials', (event, credentials) => {
+  console.log('[AUTO-LOGIN] Credenciais recebidas no preload');
+  autoLoginCredentials = credentials;
+  if (document.readyState === 'complete') setTimeout(() => tryAutoFillLogin(), 500);
 });
 
-try {
-  const originalQuery = window.navigator.permissions.query.bind(window.navigator.permissions);
-  window.navigator.permissions.query = (parameters) =>
-    parameters && parameters.name === 'notifications'
-      ? Promise.resolve({ state: Notification.permission })
-      : originalQuery(parameters);
-} catch { /* silencioso */ }
+window.addEventListener('DOMContentLoaded', () => {
+  console.log('[PRELOAD] DOM Carregado. Solicitando dados de sessão...');
+  ipcRenderer.send('request-session-data');
+  if (autoLoginCredentials) setTimeout(() => tryAutoFillLogin(), 1000);
+});
 
-const { ipcRenderer } = require('electron');
+ipcRenderer.on('inject-session-data', (event, data) => {
+  console.log('[PRELOAD] Dados de sessão recebidos:', {
+    hasLocalStorage: !!data?.localStorage,
+    hasSessionStorage: !!data?.sessionStorage,
+    hasIndexedDB: !!data?.indexedDB
+  });
 
-// =====================
-// LOGIN AUTOMÁTICO (inalterado na lógica, com pequenas proteções)
-// =====================
-let autoLoginCredentials = null;
-let loginAttempted = false;
+  if (data?.localStorage) {
+    try {
+      Object.entries(data.localStorage).forEach(([k, v]) => localStorage.setItem(k, v));
+      console.log('[PRELOAD] localStorage injetado');
+    } catch (err) { console.error('[PRELOAD] Erro localStorage:', err); }
+  }
+  if (data?.sessionStorage) {
+    try {
+      Object.entries(data.sessionStorage).forEach(([k, v]) => sessionStorage.setItem(k, v));
+      console.log('[PRELOAD] sessionStorage injetado');
+    } catch (err) { console.error('[PRELOAD] Erro sessionStorage:', err); }
+  }
+  if (data?.indexedDB) {
+    console.log('[PRELOAD] IndexedDB data recebido (placeholder)');
+  }
+});
 
-function fillFieldFast(field, value) {
-  if (!field || value == null) return false;
-  try {
-    field.focus();
-    field.value = '';
+// ===================================================================
+// AUTO-LOGIN INTELIGENTE
+// ===================================================================
+function tryAutoFillLogin() {
+  if (!autoLoginCredentials) return;
+  console.log('[AUTO-LOGIN] Tentando preencher formulário...');
+  const usernameSelectors = [
+    'input[type="email"]',
+    'input[type="text"][name*="email" i]',
+    'input[type="text"][name*="user" i]',
+    'input[type="text"][name*="login" i]',
+    'input[id*="email" i]',
+    'input[id*="user" i]',
+    'input[id*="login" i]',
+    'input[placeholder*="email" i]',
+    'input[placeholder*="user" i]',
+    'input[autocomplete="username"]',
+    'input[autocomplete="email"]'
+  ];
+  const passwordSelectors = [
+    'input[type="password"]',
+    'input[name*="password" i]',
+    'input[id*="password" i]',
+    'input[placeholder*="password" i]',
+    'input[placeholder*="senha" i]',
+    'input[autocomplete="current-password"]'
+  ];
+
+  let u = null, p = null;
+  for (const s of usernameSelectors) { const el = document.querySelector(s); if (el && el.offsetParent !== null) { u = el; break; } }
+  for (const s of passwordSelectors) { const el = document.querySelector(s); if (el && el.offsetParent !== null) { p = el; break; } }
+  if (!(u && p)) return;
+
+  const fill = (field, value) => {
     field.value = value;
     field.dispatchEvent(new Event('input', { bubbles: true }));
     field.dispatchEvent(new Event('change', { bubbles: true }));
-    return true;
-  } catch (error) {
-    console.error('[AUTO-LOGIN] Erro ao preencher campo:', error);
-    return false;
-  }
-}
+    field.dispatchEvent(new Event('blur', { bubbles: true }));
+  };
+  fill(u, autoLoginCredentials.usuariodaferramenta);
+  fill(p, autoLoginCredentials.senhadaferramenta);
 
-function performAutoLogin() {
-  if (!autoLoginCredentials || loginAttempted) return;
-
-  const { usuariodaferramenta, senhadaferramenta } = autoLoginCredentials;
-  const emailField =
-    document.querySelector('input[id="amember-login"]') ||
-    document.querySelector('input[name="amember_login"]') ||
-    document.querySelector('input[type="email"]') ||
-    document.querySelector('input[placeholder*="Username" i]');
-
-  const passwordField =
-    document.querySelector('input[id="amember-pass"]') ||
-    document.querySelector('input[name="amember_pass"]') ||
-    document.querySelector('input[type="password"]');
-
-  if (emailField && passwordField) {
-    const emailFilled = fillFieldFast(emailField, usuariodaferramenta);
-    const passwordFilled = fillFieldFast(passwordField, senhadaferramenta);
-
-    if (emailFilled && passwordFilled) {
-      loginAttempted = true;
-      setTimeout(() => {
-        const submitButton =
-          document.querySelector('input[type="submit"]') ||
-          document.querySelector('button[type="submit"]') ||
-          emailField.closest('form')?.querySelector('input[type="submit"]') ||
-          emailField.closest('form')?.querySelector('button[type="submit"]');
-
-        if (submitButton) {
-          submitButton.click();
-          const form = emailField.closest('form');
-          if (form) setTimeout(() => form.submit(), 100);
-        } else {
-          passwordField.focus();
-          passwordField.dispatchEvent(
-            new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, which: 13, bubbles: true })
-          );
-          const form = passwordField.closest('form');
-          if (form) setTimeout(() => form.submit(), 100);
-        }
-
-        showNotification('🔐 Login automático executado!');
-      }, 300);
+  setTimeout(() => {
+    const btns = [
+      'button[type="submit"]',
+      'input[type="submit"]',
+      'button[name*="login" i]',
+      'button[id*="login" i]'
+    ];
+    for (const s of btns) {
+      const b = document.querySelector(s);
+      if (b && b.offsetParent !== null) { b.click(); break; }
     }
-  } else {
-    // tenta de novo
-    setTimeout(() => {
-      loginAttempted = false;
-      performAutoLogin();
-    }, 2000);
-  }
+  }, 400);
 }
 
-function attemptAutoLogin() {
-  if (!autoLoginCredentials) return;
-  const hostname = window.location.hostname;
-  if (hostname.includes('noxtools.com')) {
-    setTimeout(() => performAutoLogin(), 1500);
-  }
-}
-
-ipcRenderer.on('set-auto-login-credentials', (_event, credentials) => {
-  autoLoginCredentials = credentials;
-  loginAttempted = false;
-  attemptAutoLogin();
+const loginObserver = new MutationObserver(() => {
+  if (autoLoginCredentials && document.querySelector('input[type="password"]')) tryAutoFillLogin();
 });
 
-// Monitor de navegação
-let currentUrl = window.location.href;
-setInterval(() => {
-  if (window.location.href !== currentUrl) {
-    currentUrl = window.location.href;
-    loginAttempted = false;
-    setTimeout(attemptAutoLogin, 800);
-  }
-}, 1000);
+// ===================================================================
+// UI DO NAVEGADOR (Barra + Downloads compacto + Toast + Watchdog)
+// ===================================================================
+function injectBrowserUI() {
+  if (document.getElementById(UI_ID)) return;
 
-// Gatilhos de carregamento
-window.addEventListener('load', () => setTimeout(attemptAutoLogin, 1200));
-document.addEventListener('DOMContentLoaded', () => setTimeout(attemptAutoLogin, 800));
+  const uiContainer = document.createElement('div');
+  uiContainer.id = UI_ID;
+  // força visibilidade caso a página injete estilos agressivos
+  uiContainer.style.display = 'block';
+  uiContainer.style.visibility = 'visible';
 
-// =====================
-// Sincronização de sessão (IndexedDB / Storage) — inalterado, com try/catch
-// =====================
-ipcRenderer.on('inject-session-data', (_event, sessionData) => {
-  (async () => {
-    try {
-      if (sessionData && typeof sessionData === 'object') {
-        if (sessionData.localStorage) {
-          for (const [key, value] of Object.entries(sessionData.localStorage)) {
-            window.localStorage.setItem(key, value);
-          }
-        }
-        if (sessionData.sessionStorage) {
-          for (const [key, value] of Object.entries(sessionData.sessionStorage)) {
-            window.sessionStorage.setItem(key, value);
-          }
-        }
-        if (sessionData.indexedDB) {
-          await importIndexedDB(sessionData.indexedDB);
-        }
-      }
-    } catch (err) {
-      console.error('[PRELOAD] Erro ao injetar dados da sessão:', err);
+  uiContainer.innerHTML = `
+    <div id="mp-titlebar" class="mp-drag">
+      <div id="mp-left" class="mp-no-drag">
+        <div id="mp-nav-controls" class="mp-no-drag" aria-label="Controles de navegação">
+          <button id="mp-back" class="mp-nav-btn" title="Voltar" aria-label="Voltar">←</button>
+          <button id="mp-forward" class="mp-nav-btn" title="Avançar" aria-label="Avançar">→</button>
+          <button id="mp-reload" class="mp-nav-btn" title="Recarregar" aria-label="Recarregar">↻</button>
+        </div>
+      </div>
+      <div id="mp-center" class="mp-no-drag">
+        <div id="mp-url-shell" role="group" aria-label="Barra de endereço">
+          <div id="mp-url-leading">
+            <img id="mp-favicon" alt="" />
+            <span id="mp-lock" title="Conexão">🔒</span>
+          </div>
+          <input
+            type="text"
+            id="mp-url-input"
+            placeholder="URL atual"
+            aria-label="Barra de endereço (somente leitura)"
+            readonly
+          />
+          <div id="mp-url-trailing">
+            <span id="mp-connection" title="Status">●</span>
+          </div>
+        </div>
+      </div>
+      <div id="mp-right" class="mp-no-drag">
+        <button id="mp-downloads-btn" class="mp-pill" aria-pressed="false" title="Downloads">
+          Downloads <span id="mp-dl-badge" class="mp-badge" aria-hidden="true" hidden>0</span>
+        </button>
+        <div id="mp-window-controls" class="mp-no-drag" aria-label="Controles da janela">
+          <button id="mp-minimize" class="mp-win-btn" title="Minimizar" aria-label="Minimizar">—</button>
+          <button id="mp-maximize" class="mp-win-btn" title="Maximizar" aria-label="Maximizar">▢</button>
+          <button id="mp-close" class="mp-win-btn mp-close" title="Fechar" aria-label="Fechar">✕</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="mp-download-manager" aria-label="Gerenciador de downloads">
+      <div id="mp-download-header">
+        <div class="mp-download-title">Downloads</div>
+        <div class="mp-download-actions-right">
+          <button id="mp-clear-history" class="mp-download-action" style="display:none;">Limpar Histórico</button>
+        </div>
+      </div>
+      <div id="mp-download-live-list" aria-live="polite"></div>
+      <div id="mp-download-history" style="display:none;"></div>
+    </div>
+
+    <div id="mp-toast-container" aria-live="polite" aria-atomic="true"></div>
+  `;
+
+  const styles = document.createElement('style');
+  styles.textContent = `
+    #${UI_ID}, #${UI_ID} * { box-sizing: border-box; }
+    #${UI_ID} {
+      position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important;
+      z-index: 2147483647 !important;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      pointer-events: auto !important; isolation: isolate !important;
+      display: block !important; visibility: visible !important;
     }
-  })();
-});
 
-ipcRenderer.send('request-session-data');
+    #mp-titlebar {
+      height: ${TOOLBAR_HEIGHT}px;
+      display: grid; grid-template-columns: auto 1fr auto;
+      align-items: center; gap: 10px; padding: 6px 10px;
+      background: rgba(24, 24, 24, 0.92);
+      backdrop-filter: saturate(140%) blur(8px);
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      user-select: none;
+    }
+    .mp-drag { -webkit-app-region: drag; }
+    .mp-no-drag { -webkit-app-region: no-drag; }
 
-async function exportIndexedDB() {
+    #mp-left, #mp-right { display: flex; align-items: center; gap: 10px; }
+
+    #mp-nav-controls { display: flex; gap: 6px; }
+    .mp-nav-btn {
+      width: 32px; height: 32px; border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+      color: #fff; cursor: pointer; font-size: 16px;
+      display: grid; place-items: center; transition: background .15s, border-color .15s, transform .08s;
+    }
+    .mp-nav-btn:hover { background: rgba(255,255,255,0.09); border-color: rgba(255,255,255,0.16); }
+    .mp-nav-btn:active { transform: translateY(1px); }
+
+    #mp-center { min-width: 0; }
+    #mp-url-shell {
+      display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px;
+      height: 32px; padding: 0 10px 0 8px;
+      background: rgba(32,32,32,0.95);
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 10px;
+    }
+    #mp-url-leading { display:flex; align-items:center; gap:6px; min-width: 0; }
+    #mp-favicon { width: 16px; height: 16px; border-radius: 3px; background: rgba(255,255,255,0.12); }
+    #mp-lock { font-size: 12px; opacity: .9; }
+    #mp-url-input {
+      width: 100%; min-width: 0; height: 28px; background: transparent; border: none; outline: none;
+      color: #f2f2f2; font-size: 13px; cursor: default;
+    }
+    #mp-url-input::placeholder { color: rgba(255,255,255,0.45); }
+    #mp-url-trailing { display:flex; align-items:center; gap:6px; }
+    #mp-connection { font-size: 10px; color: #00d084; }
+
+    #mp-downloads-btn {
+      height: 28px; padding: 0 12px; border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.05); color: #fff; font-size: 12px;
+      cursor: pointer; transition: background .15s, border-color .15s, transform .08s, opacity .2s;
+    }
+    #mp-downloads-btn[aria-pressed="true"] { border-color: rgba(255,255,255,0.18); background: rgba(255,255,255,0.12); }
+    #mp-downloads-btn:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.18); }
+    .mp-badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-width: 18px; height: 18px; padding: 0 6px;
+      margin-left: 8px; border-radius: 10px; font-size: 11px; font-weight: 600;
+      background: #0a84ff; color: #fff;
+    }
+
+    /* Destaque extra quando o HISTÓRICO estiver aberto */
+    #mp-downloads-btn[data-history-open="true"] {
+      background: rgba(255,255,255,0.16);
+      border-color: rgba(255,255,255,0.28);
+    }
+
+    #mp-window-controls { display:flex; align-items:center; gap: 2px; margin-left: 4px; }
+    .mp-win-btn {
+      width: 38px; height: 28px; border: none; border-radius: 6px;
+      background: transparent; color: #fff; cursor: pointer; font-size: 14px;
+      display: grid; place-items: center; transition: background .12s, transform .08s;
+    }
+    .mp-win-btn:hover { background: rgba(255,255,255,0.08); }
+    .mp-win-btn:active { transform: translateY(1px); }
+    .mp-win-btn.mp-close:hover { background: #d22; }
+
+    /* Download Manager (compacto) */
+    #mp-download-manager {
+      background: rgba(0,0,0,0.96);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid #0a0a0a;
+      max-height: 0; overflow: hidden; transition: max-height .24s ease;
+      display: block !important; visibility: visible !important;
+    }
+    #mp-download-manager.active { max-height: 220px; overflow-y: auto; }
+    #mp-download-header {
+      display:flex; align-items:center; justify-content:space-between;
+      padding: 6px 10px; border-bottom: 1px solid #2a2a2a; position: sticky; top: 0;
+      background: rgba(0,0,0,0.96); z-index:1;
+    }
+    #mp-download-header .mp-download-title { color:#fff; font-size:12px; font-weight:600; }
+    .mp-download-item { display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid #242424; }
+    .mp-download-icon { font-size: 18px; }
+    .mp-download-info { flex:1; min-width:0; }
+    .mp-download-name { color:#fff; font-size: 12px; font-weight:500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mp-download-progress { display:flex; align-items:center; gap:6px; margin-top:4px; }
+    .mp-progress-bar { flex:1; height:3px; background:#2a2aa; border-radius:2px; overflow:hidden; }
+    .mp-progress-fill { height:100%; background: linear-gradient(90deg,#0a84ff 0%, #00d4ff 100%); transition: width .2s ease; border-radius:2px; }
+    .mp-progress-text { color:#8a8a8a; font-size: 10px; min-width: 36px; text-align: right; }
+    .mp-download-actions { display:flex; gap:6px; }
+    .mp-download-action {
+      padding: 4px 8px; border-radius: 6px;
+      border: 1px solid #404040; background: #2a2a2a; color:#fff;
+      cursor: pointer; font-size: 11px; transition: all .12s;
+    }
+    .mp-download-action:hover { background: #3a3a3a; border-color:#0a84ff; }
+
+    html { margin:0 !important; padding:0 !important; }
+    body {
+      margin: 0 !important;
+      padding-top: ${TOOLBAR_HEIGHT}px !important;
+      min-height: 100vh !important;
+      box-sizing: border-box !important;
+    }
+
+    /* TOAST */
+    #mp-toast-container {
+      position: fixed; right: 16px; bottom: 16px; z-index: 2147483648;
+      display: flex; flex-direction: column; gap: 8px; pointer-events: none;
+    }
+    .mp-toast {
+      pointer-events: auto;
+      background: rgba(32,32,32,0.95);
+      color: #fff; border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px; padding: 10px 12px; font-size: 12px; min-width: 220px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+      display: flex; align-items: center; gap: 8px;
+      transform: translateY(8px); opacity: 0;
+      transition: transform .18s ease, opacity .18s ease;
+    }
+    .mp-toast.show { transform: translateY(0); opacity: 1; }
+
+    button:focus, input:focus { outline: 2px solid #0a84ff44; outline-offset: 2px; }
+  `;
+
+  // Injeta
+  (document.head || document.documentElement).appendChild(styles);
+  (document.body || document.documentElement).prepend(uiContainer);
+
+  console.log('[UI] Barra injetada');
+  setupBrowserUIEvents();
+
+  if (document.body) {
+    loginObserver.observe(document.body, { childList: true, subtree: true });
+  }
+}
+
+// Watchdog: garante que a barra permaneça visível e reinjeta se sumir
+let watchdogTimer = null;
+function startUIWatchdog() {
+  if (watchdogTimer) return;
+  watchdogTimer = setInterval(() => {
+    const el = document.getElementById(UI_ID);
+    if (!el || el.style.display === 'none' || getComputedStyle(el).display === 'none') {
+      console.warn('[UI] Watchdog: reinjetando barra...');
+      injectBrowserUI();
+    } else {
+      // força visibilidade
+      el.style.display = 'block';
+      el.style.visibility = 'visible';
+    }
+  }, WATCHDOG_MS);
+}
+
+// ===================================================================
+// EVENTOS DA UI
+// ===================================================================
+function setupBrowserUIEvents() {
+  document.getElementById('mp-close')?.addEventListener('click', () => ipcRenderer.send('close-secure-window'));
+  document.getElementById('mp-minimize')?.addEventListener('click', () => ipcRenderer.send('minimize-secure-window'));
+  document.getElementById('mp-maximize')?.addEventListener('click', () => ipcRenderer.send('maximize-secure-window'));
+
+  document.getElementById('mp-back')?.addEventListener('click', () => ipcRenderer.send('navigate-back'));
+  document.getElementById('mp-forward')?.addEventListener('click', () => ipcRenderer.send('navigate-forward'));
+  document.getElementById('mp-reload')?.addEventListener('click', () => ipcRenderer.send('navigate-reload'));
+
+  const urlInput = document.getElementById('mp-url-input');
+  if (urlInput) {
+    urlInput.setAttribute('readonly', 'true');
+    urlInput.addEventListener('keydown', (e) => e.preventDefault());
+    urlInput.addEventListener('paste', (e) => e.preventDefault());
+  }
+  ipcRenderer.send('request-initial-url');
+
+  const downloadsBtn = document.getElementById('mp-downloads-btn');
+  if (downloadsBtn) {
+    downloadsBtn.addEventListener('click', () => {
+      const mgr = document.getElementById('mp-download-manager');
+      if (!mgr) return;
+      const active = mgr.classList.toggle('active');
+      downloadsBtn.setAttribute('aria-pressed', String(active));
+      if (active) toggleHistory(false); // alterna para lista ao vivo ao abrir por aqui
+    });
+  }
+
+  document.getElementById('mp-clear-history')?.addEventListener('click', () => {
+    saveDownloadHistory([]);
+    renderHistory();
+    updateDownloadsBadge();
+  });
+}
+
+// Atualização de URL/ícone/cadeado
+ipcRenderer.on('url-updated', (event, url) => {
+  const urlInput = document.getElementById('mp-url-input');
+  const lock = document.getElementById('mp-lock');
+  const fav = document.getElementById('mp-favicon');
+  const connection = document.getElementById('mp-connection');
+
+  if (urlInput) urlInput.value = url || '';
   try {
-    const allData = {};
-    const databases = await (window.indexedDB.databases?.() || []);
-    if (!databases || databases.length === 0) return {};
-    for (const dbInfo of databases) {
-      if (!dbInfo.name) continue;
-      try {
-        const dbData = {};
-        const db = await new Promise((resolve, reject) => {
-          const request = window.indexedDB.open(dbInfo.name);
-          request.onerror = (e) => reject(`Erro ao abrir DB: ${dbInfo.name} - ${e.target.error}`);
-          request.onsuccess = (e) => resolve(e.target.result);
-        });
-        const storeNames = Array.from(db.objectStoreNames || []);
-        if (storeNames.length === 0) { db.close(); continue; }
-        const tx = db.transaction(storeNames, 'readonly');
-        for (const storeName of storeNames) {
-          const storeData = await new Promise((resolve, reject) => {
-            const request = tx.objectStore(storeName).getAll();
-            request.onerror = (e) => reject(`Erro ao ler store: ${storeName} - ${e.target.error}`);
-            request.onsuccess = (e) => resolve(e.target.result);
-          });
-          dbData[storeName] = storeData;
-        }
-        allData[dbInfo.name] = dbData;
-        db.close();
-      } catch (dbError) {
-        console.error(`[INDEXEDDB EXPORT] Falha ao exportar DB "${dbInfo.name}":`, dbError);
-      }
+    const u = new URL(url);
+    if (lock) lock.textContent = u.protocol === 'https:' ? '🔒' : '⚠️';
+    if (fav) {
+      const icon = `${u.origin}/favicon.ico`;
+      fav.src = icon;
+      fav.onerror = () => { fav.removeAttribute('src'); };
     }
-    return allData;
-  } catch (error) {
-    console.error('[INDEXEDDB EXPORT] Falha crítica na exportação:', error);
-    return {};
+    if (connection) {
+      connection.style.color = (u.protocol === 'https:') ? '#00d084' : '#ff9f00';
+      connection.title = (u.protocol === 'https:') ? 'Conexão segura' : 'Conexão não segura';
+    }
+  } catch {
+    if (lock) lock.textContent = '⚠️';
   }
+});
+
+// ===================================================================
+// DOWNLOADS + TOAST
+// ===================================================================
+const DL_HISTORY_KEY = 'mp-download-history-v1';
+
+function loadDownloadHistory() { try { const raw = localStorage.getItem(DL_HISTORY_KEY); return raw ? JSON.parse(raw) : []; } catch { return []; } }
+function saveDownloadHistory(items) { try { localStorage.setItem(DL_HISTORY_KEY, JSON.stringify(items.slice(0, 500))); } catch {} }
+function addHistoryItem({ filename, path, state, finishedAt }) {
+  const items = loadDownloadHistory();
+  items.unshift({ filename, path: path || null, state, finishedAt: finishedAt || new Date().toISOString() });
+  saveDownloadHistory(items);
+}
+function humanDate(iso) { try { return new Date(iso).toLocaleString('pt-BR', { hour12: false }); } catch { return iso; } }
+
+function renderHistory() {
+  const historyEl = document.getElementById('mp-download-history');
+  if (!historyEl) return;
+  const items = loadDownloadHistory();
+  if (!items.length) {
+    historyEl.innerHTML = `
+      <div class="mp-download-item">
+        <div class="mp-download-icon">📭</div>
+        <div class="mp-download-info"><div class="mp-download-name">Sem itens no histórico</div></div>
+      </div>`;
+    return;
+  }
+  historyEl.innerHTML = items.map((it, idx) => `
+    <div class="mp-download-item" data-idx="${idx}">
+      <div class="mp-download-icon">${it.state === 'completed' ? '✅' : '❌'}</div>
+      <div class="mp-download-info">
+        <div class="mp-download-name" title="${sanitizeText(it.filename)}">${sanitizeText(it.filename)}</div>
+        <div class="mp-download-progress" style="margin-top:4px;">
+          <div class="mp-progress-text">${humanDate(it.finishedAt)}</div>
+        </div>
+      </div>
+      <div class="mp-download-actions">
+        <button class="mp-download-action" data-action="open" ${it.path ? '' : 'disabled'}>Abrir</button>
+        <button class="mp-download-action" data-action="show" ${it.path ? '' : 'disabled'}>Mostrar</button>
+      </div>
+    </div>
+  `).join('');
+
+  historyEl.querySelectorAll('.mp-download-item').forEach(row => {
+    const idx = Number(row.getAttribute('data-idx'));
+    const item = loadDownloadHistory()[idx];
+    row.querySelector('[data-action="open"]')?.addEventListener('click', () => { if (item?.path) ipcRenderer.send('open-download', item.path); });
+    row.querySelector('[data-action="show"]')?.addEventListener('click', () => { if (item?.path) ipcRenderer.send('show-download-in-folder', item.path); });
+  });
 }
 
-async function importIndexedDB(dataToImport) {
-  if (!dataToImport || Object.keys(dataToImport).length === 0) return;
-  for (const dbName in dataToImport) {
-    try {
-      const dbStoresToImport = Object.keys(dataToImport[dbName] || {});
-      if (dbStoresToImport.length === 0) continue;
+/**
+ * Alterna entre exibir o histórico e a lista ao vivo.
+ * Também marca o botão com data-history-open="true" quando o HISTÓRICO está aberto,
+ * deixando-o destacado conforme a regra CSS.
+ */
+function toggleHistory(show) {
+  const historyEl    = document.getElementById('mp-download-history');
+  const liveEl       = document.getElementById('mp-download-live-list');
+  const clearBtn     = document.getElementById('mp-clear-history');
+  const mgr          = document.getElementById('mp-download-manager');
+  const downloadsBtn = document.getElementById('mp-downloads-btn');
+  if (!historyEl || !liveEl) return;
 
-      if (dbName.includes('captions')) {
-        console.log(`[INDEXEDDB] Pulando importação para DB do captions: ${dbName}`);
-        continue;
-      }
+  const willShow = typeof show === 'boolean' ? show : (historyEl.style.display === 'none');
 
-      const db = await new Promise((resolve, reject) => {
-        const request = window.indexedDB.open(dbName, Date.now());
-        request.onerror = (e) => reject(`Erro ao abrir/criar DB: ${dbName} - ${e.target.error}`);
-        request.onsuccess = (e) => resolve(e.target.result);
-        request.onupgradeneeded = (e) => {
-          const dbInstance = e.target.result;
-          const existingStores = Array.from(dbInstance.objectStoreNames || []);
-          dbStoresToImport.forEach(storeName => {
-            if (!existingStores.includes(storeName)) {
-              dbInstance.createObjectStore(storeName);
-            }
-          });
-        };
-      });
+  historyEl.style.display = willShow ? 'block' : 'none';
+  liveEl.style.display    = willShow ? 'none'  : 'block';
+  if (clearBtn) clearBtn.style.display = willShow ? 'inline-block' : 'none';
 
-      await new Promise((resolve, reject) => {
-        const tx = db.transaction(dbStoresToImport, 'readwrite');
-        tx.oncomplete = () => resolve();
-        tx.onerror = (e) => reject(`Falha na transação de escrita: ${e.target.error}`);
-        for (const storeName of dbStoresToImport) {
-          const store = tx.objectStore(storeName);
-          store.clear();
-          const records = dataToImport[dbName][storeName] || [];
-          records.forEach(record => {
-            try { store.put(record); } catch { /* ignora registro ruim */ }
-          });
-        }
-      });
-      db.close();
-    } catch (error) {
-      console.error(`[INDEXEDDB IMPORT] Falha crítica na importação de "${dbName}":`, error);
-    }
+  if (mgr) mgr.classList.add('active'); // manter painel visível
+
+  if (downloadsBtn) {
+    // Destaque extra somente quando HISTÓRICO estiver aberto
+    downloadsBtn.setAttribute('data-history-open', String(willShow));
+    if (willShow) downloadsBtn.setAttribute('aria-pressed', 'true');
   }
+
+  if (willShow) renderHistory();
 }
 
-console.log('%c[PRELOAD SCRIPT OTIMIZADO] Layout seguro e anti-tooltip conservador!', 'color: #00FF00; font-size: 14px;');
-
-// =====================
-// BARRA (Titlebar) — mais compatível com sites
-// =====================
-(() => {
-  const TITLE_BAR_HEIGHT = 40;
-  const CONTAINER_ID = 'secure-browser-titlebar-2025';
-  const HTML_CLASS = 'with-secure-titlebar';
-  let isInitialized = false;
-  const downloads = new Map();
-  let container = null;
-  let shadowRoot = null;
-
-  // Throttle helper
-  function throttle(fn, wait = 100) {
-    let last = 0, timer = null;
-    return (...args) => {
-      const now = Date.now();
-      const remaining = wait - (now - last);
-      if (remaining <= 0) {
-        last = now;
-        fn.apply(null, args);
-      } else if (!timer) {
-        timer = setTimeout(() => {
-          last = Date.now();
-          timer = null;
-          fn.apply(null, args);
-        }, remaining);
-      }
-    };
-  }
-
-  function createTitleBar() {
-    if (isInitialized || document.getElementById(CONTAINER_ID)) return;
-    isInitialized = true;
-
-    try {
-      container = document.createElement('div');
-      container.id = CONTAINER_ID;
-      container.setAttribute('data-secure-browser', 'true');
-
-      // Importante: container não afeta layout da página (overlay)
-      container.style.cssText = `
-        position: fixed;
-        inset: 0 auto auto 0;
-        width: 100%;
-        height: ${TITLE_BAR_HEIGHT}px;
-        z-index: 2147483647;
-        pointer-events: none; /* barra por dentro tem auto */
-        isolation: isolate;
-      `;
-
-      shadowRoot = container.attachShadow({ mode: 'closed' });
-
-      const style = document.createElement('style');
-      style.textContent = `
-        :host { all: initial; display: block; position: fixed; top: 0; left: 0; width: 100%; height: ${TITLE_BAR_HEIGHT}px; }
-        .bar {
-          width: 100%; height: 100%;
-          background: linear-gradient(180deg, #2c3e50 0%, #34495e 100%);
-          display: flex; align-items: center; justify-content: space-between;
-          padding: 0 10px; box-sizing: border-box;
-          border-bottom: 1px solid #1a252f;
-          box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-          -webkit-app-region: drag;
-          pointer-events: auto;
-          font: 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-          color: #ecf0f1; user-select: none;
-        }
-        .bar * { -webkit-app-region: no-drag; pointer-events: auto; }
-        .group { display: flex; align-items: center; gap: 8px; }
-        .url-box { flex: 1; display: flex; align-items: center; gap: 10px; padding: 0 20px; }
-        .status { width: 8px; height: 8px; border-radius: 50%; background: ${navigator.onLine ? '#2ecc71' : '#e74c3c'}; }
-        .url { flex: 1; height: 26px; background: rgba(0,0,0,0.2); border: 1px solid #2c3e50; border-radius: 13px; color: #ecf0f1; padding: 0 12px; font-size: 12px; text-align: center; outline: none; }
-        button { width: 30px; height: 30px; background: transparent; color: #ecf0f1; border: none; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 18px; transition: background 0.2s; padding: 0; margin: 0; outline: none; position: relative; overflow: hidden; }
-        button:hover { background: rgba(255,255,255,0.1); }
-        button.close:hover { background: #e74c3c; }
-        .nav { font-size: 22px; }
-        .downloads-menu {
-          display: none; position: absolute; top: 100%; right: 10px; width: 330px; max-height: 450px;
-          background: #34495e; border: 1px solid #2c3e50; border-radius: 0 0 8px 8px;
-          box-shadow: 0 8px 20px rgba(0,0,0,0.35); overflow-y: auto; color: #ecf0f1; font-size: 13px; padding: 8px; box-sizing: border-box;
-        }
-        .downloads-menu.open { display: block; }
-        .downloads-menu:empty::before { content: 'Nenhum download iniciado'; display: block; text-align: center; padding: 20px; color: #bdc3c7; }
-        .dl-item { padding: 10px; border-bottom: 1px solid #2c3e50; }
-        .dl-item:last-child { border-bottom: none; }
-        .dl-info { display: flex; justify-content: space-between; margin-bottom: 6px; }
-        .dl-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
-        .dl-progress { height: 5px; background: rgba(0,0,0,0.3); border-radius: 3px; overflow: hidden; }
-        .dl-bar { height: 100%; background: #3498db; transition: width 0.3s; }
-        .dl-bar.done { background: #2ecc71; }
-        .dl-actions { margin-top: 8px; display: flex; gap: 15px; font-size: 12px; }
-        .dl-action { color: #3498db; cursor: pointer; text-decoration: none; }
-        .dl-action:hover { color: #5dade2; text-decoration: underline; }
-        .notification-popup {
-          position: fixed; bottom: 20px; right: -400px;
-          background-color: #2c3e50; color: #ecf0f1; padding: 12px 20px; border-radius: 6px;
-          border-left: 4px solid #3498db; box-shadow: 0 5px 15px rgba(0,0,0,0.3);
-          z-index: 2147483647; font: 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-          transition: right 0.5s cubic-bezier(0.68,-0.55,0.27,1.55); pointer-events: none;
-        }
-        .notification-popup.visible { right: 20px; }
-      `;
-      shadowRoot.appendChild(style);
-
-      const bar = document.createElement('div');
-      bar.className = 'bar';
-      bar.innerHTML = `
-        <div class="group">
-          <button class="nav" data-action="back" title="Voltar">←</button>
-          <button class="nav" data-action="forward" title="Avançar">→</button>
-          <button data-action="reload" title="Recarregar">↻</button>
-        </div>
-        <div class="url-box">
-          <div class="status" aria-hidden="true"></div>
-          <input type="text" class="url" readonly>
-        </div>
-        <div class="group">
-          <button data-action="downloads" title="Downloads">📥</button>
-          <button data-action="minimize" title="Minimizar">−</button>
-          <button data-action="maximize" title="Maximizar">☐</button>
-          <button class="close" data-action="close" title="Fechar">×</button>
-        </div>
-        <div class="downloads-menu"></div>
-      `;
-      shadowRoot.appendChild(bar);
-
-      // Insere antes do body para não “puxar” layout
-      (document.body || document.documentElement).appendChild(container);
-
-      // Ajuste de layout MUITO conservador
-      applyLayoutReservation();
-      setupAntiTooltipProtection();
-      setupEvents();
-      setupIpcListeners();
-      ipcRenderer.send('request-initial-url');
-      setupDomMonitoring();
-    } catch (error) {
-      console.error('[SECURE BROWSER] Erro ao criar barra:', error);
-    }
-  }
-
-  // ---------------------
-  // Notificações discretas
-  // ---------------------
-  function showNotification(text) {
-    if (!shadowRoot) return;
-    const notif = document.createElement('div');
-    notif.className = 'notification-popup';
-    notif.textContent = text;
-    shadowRoot.appendChild(notif);
-    requestAnimationFrame(() => notif.classList.add('visible'));
-    setTimeout(() => {
-      notif.classList.remove('visible');
-      setTimeout(() => { try { shadowRoot.removeChild(notif); } catch {} }, 500);
-    }, 4000);
-  }
-
-  // ===========================================================
-  // ANTI-TOOLTIP (Conservador): somente leonardo.ai por padrão
-  // ===========================================================
-  function setupAntiTooltipProtection() {
-    const host = window.location.hostname;
-
-    // Lista de exceções em que NÃO fazemos nada (mantém site intacto)
-    const allowedHostnames = ['canva.com', 'placeit.net', 'hailuoai.video', 'vectorizer.ai', 'gamma.app'];
-    if (allowedHostnames.some(h => host.includes(h))) {
-      return;
-    }
-
-    // Modo específico para leonardo.ai (mantido)
-    if (host.includes('leonardo.ai')) {
-      const tooltipSelectors = [
-        '[role="tooltip"]',
-        '.MuiTooltip-tooltip',
-        '.MuiTooltip-popper',
-        '[class*="tooltip"]',
-        '[class*="Tooltip"]'
-      ].join(',');
-
-      const observer = new MutationObserver((mutations) => {
-        for (const mutation of mutations) {
-          for (const node of mutation.addedNodes) {
-            if (node.nodeType !== Node.ELEMENT_NODE) continue;
-
-            const findAndHide = (el) => {
-              if (!el.matches) return;
-
-              if (el.matches(tooltipSelectors) && el.textContent.includes('Download image')) {
-                el.style.setProperty('display', 'none', 'important');
-              }
-              if (el.matches('[role="dialog"]')) {
-                const t = el.textContent || '';
-                if (t.includes('Upgrade') || t.includes('limit')) {
-                  el.style.setProperty('display', 'none', 'important');
-                }
-              }
-              // filhos
-              el.querySelectorAll(tooltipSelectors).forEach(child => {
-                if ((child.textContent || '').includes('Download image')) {
-                  child.style.setProperty('display', 'none', 'important');
-                }
-              });
-            };
-
-            findAndHide(node);
-          }
-        }
-      });
-
-      observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
-      return;
-    }
-
-    // ⚠️ Nada global aqui (o antigo CSS que escondia tooltips em todo site foi removido)
-  }
-
-  // ===========================================================
-  // RESERVA DE ESPAÇO (sem mexer em <html> / viewport / overflow)
-  // ===========================================================
-  function applyLayoutReservation() {
-    // adiciona uma classe para escopo e um padding-top no body
-    document.documentElement.classList.add(HTML_CLASS);
-
-    let styleEl = document.getElementById('secure-browser-layout-reservation');
-    if (!styleEl) {
-      styleEl = document.createElement('style');
-      styleEl.id = 'secure-browser-layout-reservation';
-      styleEl.textContent = `
-        .${HTML_CLASS} body { padding-top: ${TITLE_BAR_HEIGHT}px !important; }
-      `;
-      (document.head || document.documentElement).appendChild(styleEl);
-    }
-
-    // Ajusta apenas headers fixos legitimos; sem transform
-    safeAdjustOnlyHeaders();
-  }
-
-  // --- NOVO: seleção restrita de headers e ajuste via 'top' (sem transform) ---
-  function safeAdjustOnlyHeaders() {
-    const candidates = [];
-
-    const headerSelectors = [
-      'header',
-      '[role="banner"]',
-      'nav[role="navigation"]',
-      '.header',
-      '.topbar',
-      '.navbar',
-      '.app-header',
-    ].join(',');
-
-    document.querySelectorAll(headerSelectors).forEach((el) => {
-      try {
-        if (el.dataset.sbSkip === 'true') return;
-
-        const cs = window.getComputedStyle(el);
-        const pos = cs.position;
-        if (pos !== 'fixed' && pos !== 'sticky') return;
-
-        const top = parseFloat(cs.top || '0');
-        if (isNaN(top) || top > 1) return;
-
-        const z = parseInt(cs.zIndex, 10);
-        const rect = el.getBoundingClientRect();
-
-        const looksLikeHeader =
-          rect.height <= 140 &&
-          (isNaN(z) || z < 3000);
-
-        if (!looksLikeHeader) return;
-
-        // evita ajustar headers que contenham modais/tooltip/toasts
-        if (el.querySelector('[role="dialog"],[aria-modal="true"],.modal,.MuiModal-root,[data-reach-dialog-overlay],[role="tooltip"],.tooltip,.toast,.snackbar')) {
-          return;
-        }
-
-        if (el.dataset.sbAdjusted !== 'true') {
-          el.dataset.sbAdjusted = 'true';
-          el.dataset.sbPrevTop = cs.top || '0px';
-          const newTop = (top || 0) + TITLE_BAR_HEIGHT;
-          el.style.top = `${newTop}px`;
-        }
-      } catch { /* silencioso */ }
-    });
-  }
-
-  function revertHeaderAdjustments() {
-    document.querySelectorAll('[data-sb-adjusted="true"]').forEach((el) => {
-      try {
-        const prevTop = el.dataset.sbPrevTop || '0px';
-        el.style.top = prevTop;
-        delete el.dataset.sbPrevTop;
-        el.dataset.sbAdjusted = 'false';
-      } catch { /* silencioso */ }
-    });
-  }
-
-  // Recalcula em eventos relevantes, com throttle
-  const reevaluate = throttle(() => {
-    revertHeaderAdjustments();
-    safeAdjustOnlyHeaders();
-  }, 200);
-
-  function setupDomMonitoring() {
-    const mo = new MutationObserver(throttle(() => {
-      if (!document.getElementById(CONTAINER_ID)) { isInitialized = false; createTitleBar(); }
-      if (!document.getElementById('secure-browser-layout-reservation')) applyLayoutReservation();
-      // Reavaliar sobreposição após mutações grandes
-      reevaluate();
-    }, 250));
-
-    mo.observe(document.documentElement, { childList: true, subtree: true });
-
-    // Reage a resize/scroll (com throttle)
-    window.addEventListener('resize', reevaluate, { passive: true });
-    window.addEventListener('scroll', throttle(() => {
-      if (window.scrollY < 200) reevaluate();
-    }, 200), { passive: true });
-
-    // ResizeObserver para headers dinâmicos
-    try {
-      const ro = new ResizeObserver(reevaluate);
-      ro.observe(document.body);
-    } catch { /* não obrigatório */ }
-  }
-
-  // ---------------------
-  // Eventos da barra / IPC
-  // ---------------------
-  function setupEvents() {
-    if (!shadowRoot) return;
-    const barEl = shadowRoot.querySelector('.bar');
-    barEl.addEventListener('click', (e) => {
-      const button = e.target.closest('button[data-action]');
-      if (!button) return;
-      e.stopPropagation(); e.preventDefault();
-      const action = button.dataset.action;
-      switch (action) {
-        case 'back': ipcRenderer.send('navigate-back'); break;
-        case 'forward': ipcRenderer.send('navigate-forward'); break;
-        case 'reload': ipcRenderer.send('navigate-reload'); break;
-        case 'downloads': shadowRoot.querySelector('.downloads-menu').classList.toggle('open'); break;
-        case 'export': exportSession(); break;
-        case 'minimize': ipcRenderer.send('minimize-secure-window'); break;
-        case 'maximize': ipcRenderer.send('maximize-secure-window'); break;
-        case 'close': ipcRenderer.send('close-secure-window'); break;
-      }
-    });
-
-    shadowRoot.addEventListener('click', (e) => {
-      if (!e.target.closest('.downloads-menu') && !e.target.closest('[data-action="downloads"]')) {
-        shadowRoot.querySelector('.downloads-menu').classList.remove('open');
-      }
-    });
-
-    const updateStatus = () => {
-      if (!shadowRoot) return;
-      const s = shadowRoot.querySelector('.status');
-      if (s) s.style.background = navigator.onLine ? '#2ecc71' : '#e74c3c';
-    };
-    window.addEventListener('online', updateStatus);
-    window.addEventListener('offline', updateStatus);
-  }
-
-  async function exportSession() {
-    const getStorage = (s) => {
-      const o = {};
-      for (let i = 0; i < s.length; i++) {
-        const k = s.key(i);
-        if (k) o[k] = s.getItem(k);
-      }
-      return o;
-    };
-    ipcRenderer.send('initiate-full-session-export', {
-      localStorageData: getStorage(window.localStorage),
-      sessionStorageData: getStorage(window.sessionStorage),
-      indexedDBData: await exportIndexedDB()
-    });
-  }
-
-  function setupIpcListeners() {
-    ipcRenderer.on('url-updated', (_event, url) => {
-      const urlInput = shadowRoot?.querySelector('.url');
-      if (urlInput) urlInput.value = url;
-    });
-
-    ipcRenderer.on('download-started', (_event, { id, filename }) => {
-      downloads.set(id, { filename, progress: 0, state: 'active' });
-      updateDownloadsUI();
-      showNotification(`Download iniciado: ${filename}`);
-    });
-
-    ipcRenderer.on('download-progress', (_event, { id, progress }) => {
-      const dl = downloads.get(id);
-      if (dl?.state === 'active') {
-        dl.progress = progress;
-        updateDownloadsUI();
-      }
-    });
-
-    ipcRenderer.on('download-complete', (_event, { id, state, path }) => {
-      const dl = downloads.get(id);
-      if (dl) {
-        dl.state = state;
-        dl.path = path;
-        dl.progress = (state === 'completed') ? 100 : dl.progress;
-        updateDownloadsUI();
-      }
-    });
-  }
-
-  function updateDownloadsUI() {
-    const menu = shadowRoot?.querySelector('.downloads-menu');
-    if (!menu) return;
-    menu.innerHTML = '';
-    downloads.forEach((dl) => {
-      const item = document.createElement('div');
-      item.className = 'dl-item';
-      let status = `${Math.max(0, Math.min(100, Math.round(dl.progress || 0)))}%`;
-      if (dl.state === 'completed') status = 'Concluído';
-      else if (dl.state === 'cancelled') status = 'Cancelado';
-      else if (dl.state === 'interrupted') status = 'Falha';
-
-      item.innerHTML = `
-        <div class="dl-info">
-          <span class="dl-name" title="${dl.filename}">${dl.filename}</span>
-          <span>${status}</span>
-        </div>
-        <div class="dl-progress">
-          <div class="dl-bar ${dl.state === 'completed' ? 'done' : ''}" style="width: ${Math.max(0, Math.min(100, dl.progress || 0))}%"></div>
-        </div>
-      `;
-
-      if (dl.state === 'completed' && dl.path) {
-        const actions = document.createElement('div');
-        actions.className = 'dl-actions';
-        actions.innerHTML = `
-          <a class="dl-action" data-path="${dl.path}" data-action="open">Abrir</a>
-          <a class="dl-action" data-path="${dl.path}" data-action="show">Mostrar na pasta</a>
-        `;
-        actions.addEventListener('click', (e) => {
-          const target = e.target.closest('.dl-action');
-          if (!target) return;
-          ipcRenderer.send(target.dataset.action === 'open' ? 'open-download' : 'show-download-in-folder', target.dataset.path);
-        });
-        item.appendChild(actions);
-      }
-
-      menu.appendChild(item);
-    });
-  }
-
-  // Inicialização
-  if (document.readyState === 'interactive' || document.readyState === 'complete') {
-    createTitleBar();
+function updateDownloadsBadge() {
+  const badge = document.getElementById('mp-dl-badge');
+  if (!badge) return;
+  const activeCount = activeDownloads.size;
+  const historyCount = loadDownloadHistory().length;
+  const total = activeCount || historyCount || 0;
+  if (total > 0) {
+    badge.textContent = String(activeCount || historyCount);
+    badge.hidden = false;
   } else {
-    document.addEventListener('DOMContentLoaded', createTitleBar, { once: true });
+    badge.hidden = true;
   }
+}
+
+function showToast(message, { actions = [] } = {}) {
+  const container = document.getElementById('mp-toast-container');
+  if (!container) return;
+  const el = document.createElement('div');
+  el.className = 'mp-toast';
+  el.innerHTML = `
+    <div class="mp-toast-icon">📥</div>
+    <div class="mp-toast-text">${message}</div>
+    <div class="mp-toast-actions"></div>
+  `;
+  const actionsEl = el.querySelector('.mp-toast-actions');
+  actions.forEach(({ label, onClick }) => {
+    const btn = document.createElement('button');
+    btn.textContent = label;
+    btn.addEventListener('click', (e) => { e.stopPropagation(); onClick?.(); removeToast(); });
+    actionsEl.appendChild(btn);
+  });
+  container.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  const removeToast = () => { el.classList.remove('show'); setTimeout(() => el.remove(), 180); };
+  const t = setTimeout(removeToast, 4000);
+  el.addEventListener('mouseenter', () => clearTimeout(t));
+  el.addEventListener('mouseleave', () => setTimeout(removeToast, 1500));
+}
+
+const activeDownloads = new Map();
+const downloadManager = () => document.getElementById('mp-download-manager');
+const liveList = () => document.getElementById('mp-download-live-list');
+
+ipcRenderer.on('download-started', (event, { id, filename }) => {
+  console.log('[DOWNLOAD] Iniciado:', filename);
+  const mgr = downloadManager(); if (mgr) mgr.classList.add('active');
+
+  const btn = document.getElementById('mp-downloads-btn');
+  if (btn) btn.setAttribute('aria-pressed', 'true');
+
+  showToast(`Download iniciado: <strong>${sanitizeText(filename)}</strong>`, {
+    actions: [{ label: 'Ver', onClick: () => { const mgrEl = downloadManager(); if (mgrEl) mgrEl.classList.add('active'); } }]
+  });
+
+  const list = liveList(); if (!list) return;
+  const row = document.createElement('div');
+  row.className = 'mp-download-item';
+  row.id = `download-${id}`;
+  row.innerHTML = `
+    <div class="mp-download-icon">📥</div>
+    <div class="mp-download-info">
+      <div class="mp-download-name">${sanitizeText(filename)}</div>
+      <div class="mp-download-progress">
+        <div class="mp-progress-bar"><div class="mp-progress-fill" style="width:0%"></div></div>
+        <div class="mp-progress-text">0%</div>
+      </div>
+    </div>
+    <div class="mp-download-actions" style="display:none;">
+      <button class="mp-download-action" data-action="open">Abrir</button>
+      <button class="mp-download-action" data-action="show">Mostrar</button>
+    </div>
+  `;
+  list.appendChild(row);
+  activeDownloads.set(id, { filename, element: row, path: null });
+
+  const mgrEl = downloadManager();
+  if (mgrEl) mgrEl.classList.add('active');
+  updateDownloadsBadge();
+});
+
+ipcRenderer.on('download-progress', (event, { id, progress }) => {
+  const d = activeDownloads.get(id);
+  if (d) {
+    const fill = d.element.querySelector('.mp-progress-fill');
+    const txt = d.element.querySelector('.mp-progress-text');
+    if (fill) fill.style.width = `${progress}%`;
+    if (txt) txt.textContent = `${progress}%`;
+  }
+});
+
+ipcRenderer.on('download-complete', (event, { id, state, path }) => {
+  const d = activeDownloads.get(id);
+  if (d) {
+    d.path = path;
+    const icon = d.element.querySelector('.mp-download-icon');
+    const fill = d.element.querySelector('.mp-progress-fill');
+    const txt = d.element.querySelector('.mp-download-progress .mp-progress-text');
+    const actions = d.element.querySelector('.mp-download-actions');
+
+    if (state === 'completed') {
+      if (icon) icon.textContent = '✅';
+      if (fill) fill.style.width = '100%';
+      if (txt) txt.textContent = '100%';
+      if (actions) {
+        actions.style.display = 'flex';
+        actions.querySelector('[data-action="open"]')?.addEventListener('click', () => ipcRenderer.send('open-download', path));
+        actions.querySelector('[data-action="show"]')?.addEventListener('click', () => ipcRenderer.send('show-download-in-folder', path));
+      }
+      addHistoryItem({ filename: d.filename, path, state: 'completed', finishedAt: new Date().toISOString() });
+    } else {
+      if (icon) icon.textContent = '❌';
+      if (txt) txt.textContent = 'Falhou';
+      addHistoryItem({ filename: d.filename, path: null, state: 'failed', finishedAt: new Date().toISOString() });
+    }
+
+    setTimeout(() => {
+      d.element.style.opacity = '0';
+      d.element.style.transition = 'opacity .4s';
+      setTimeout(() => {
+        d.element.remove();
+        activeDownloads.delete(id);
+        const mgr = downloadManager();
+        const historyShown = document.getElementById('mp-download-history')?.style.display === 'block';
+        if (mgr && !historyShown && activeDownloads.size === 0) {
+          const downloadsBtn = document.getElementById('mp-downloads-btn');
+          if (downloadsBtn?.getAttribute('aria-pressed') !== 'true') mgr.classList.remove('active');
+        }
+        updateDownloadsBadge();
+      }, 400);
+    }, 8000);
+  } else {
+    updateDownloadsBadge();
+  }
+});
+
+// Sanitização simples
+function sanitizeText(str) {
+  try { return String(str).replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
+  catch { return str; }
+}
+
+// ===================================================================
+// ANTI-SOBREPOSIÇÃO (headers/modais fixed/sticky)
+// ===================================================================
+(() => {
+  const OFFSET = TOOLBAR_HEIGHT;
+  const adjusted = new WeakSet();
+  const isInside = (el) => !!el.closest(`#${UI_ID}`);
+  const shouldSkip = (el) => !el || el.nodeType !== 1 || isInside(el) || (() => {
+    const r = el.getBoundingClientRect?.(); return !r || (r.width === 0 && r.height === 0);
+  })();
+
+  function bump(el) {
+    if (shouldSkip(el) || adjusted.has(el)) return;
+    const cs = getComputedStyle(el), pos = cs.position;
+    if (pos !== 'fixed' && pos !== 'sticky') return;
+    const topStr = cs.top, topIsAuto = topStr === 'auto', topPx = topIsAuto ? NaN : parseFloat(topStr || '0');
+    const usesInsetZero = (cs.top === '0px' && cs.left === '0px' && cs.right === '0px') || (cs.bottom === '0px' && cs.left === '0px' && cs.right === '0px');
+    const collides = (!isNaN(topPx) && topPx <= OFFSET + 0.5) || (pos === 'sticky' && (topIsAuto || topStr === '0px'));
+    if (collides || usesInsetZero) {
+      if (!isNaN(topPx)) el.style.top = (topPx + OFFSET) + 'px';
+      else {
+        const t = cs.transform === 'none' ? '' : cs.transform;
+        el.style.transform = `translateY(${OFFSET}px) ${t.includes('matrix') || t.includes('translate') ? '' : t}`.trim();
+        el.style.willChange = 'transform';
+      }
+      el.style.setProperty('scroll-margin-top', `${OFFSET}px`, 'important');
+      adjusted.add(el);
+    }
+  }
+
+  function scan(root) {
+    if (root.querySelectorAll) {
+      root.querySelectorAll([
+        '[class*="modal"]','[class*="popup"]','[class*="dialog"]','[class*="drawer"]',
+        '[class*="toast"]','[class*="banner"]','[class*="header"]','[class*="fixed"]',
+        '[data-modal]','[role="dialog"]','[role="alertdialog"]','[role="banner"]','[role="tooltip"]'
+      ].join(',')).forEach(bump);
+    }
+    bump(root);
+  }
+
+  const obs = new MutationObserver((muts) => muts.forEach(m => {
+    if (m.type === 'childList') m.addedNodes.forEach(scan);
+    else if (m.type === 'attributes') bump(m.target);
+  }));
+
+  function start() {
+    if (!document.body) return;
+    obs.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class','style'] });
+    scan(document.body);
+  }
+
+  ['load','resize','orientationchange'].forEach(evt => {
+    window.addEventListener(evt, () => { if (document.body) scan(document.body); }, { passive: true });
+  });
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
+  else start();
 })();
+
+// ===================================================================
+// INICIALIZAÇÃO + WATCHDOG
+// ===================================================================
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => { injectBrowserUI(); startUIWatchdog(); }, { once: true });
+else { injectBrowserUI(); startUIWatchdog(); }
+window.addEventListener('load', () => {
+  if (!document.getElementById(UI_ID)) injectBrowserUI();
+});
+
+// ===================================================================
+// API EXPOSTA
+// ===================================================================
+contextBridge.exposeInMainWorld('electronAPI', {
+  navigateBack:   () => ipcRenderer.send('navigate-back'),
+  navigateForward:() => ipcRenderer.send('navigate-forward'),
+  navigateReload: () => ipcRenderer.send('navigate-reload'),
+  navigateToUrl:  (url) => ipcRenderer.send('navigate-to-url', url),
+
+  minimizeWindow: () => ipcRenderer.send('minimize-secure-window'),
+  maximizeWindow: () => ipcRenderer.send('maximize-secure-window'),
+  closeWindow:    () => ipcRenderer.send('close-secure-window'),
+
+  openDownload:           (path) => ipcRenderer.send('open-download', path),
+  showDownloadInFolder:   (path) => ipcRenderer.send('show-download-in-folder', path),
+
+  getDownloadHistory:   () => loadDownloadHistory(),
+  clearDownloadHistory: () => { saveDownloadHistory([]); renderHistory(); },
+  showDownloadHistory:  () => { const mgr = document.getElementById('mp-download-manager'); if (mgr) mgr.classList.add('active'); toggleHistory(true); },
+
+  onUrlUpdated:       (cb) => ipcRenderer.on('url-updated', (e, url) => cb(url)),
+  onDownloadStarted:  (cb) => ipcRenderer.on('download-started', (e, d) => cb(d)),
+  onDownloadProgress: (cb) => ipcRenderer.on('download-progress', (e, d) => cb(d)),
+  onDownloadComplete: (cb) => ipcRenderer.on('download-complete', (e, d) => cb(d))
+});
+
+console.log('[PRELOAD-SECURE] Preload script carregado e watchdog ativo! 🚀');
