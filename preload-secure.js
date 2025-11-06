@@ -1,815 +1,639 @@
 /* eslint-disable no-undef */
-const { contextBridge, ipcRenderer } = require('electron');
+// preload-secure.js
 
-// ===================================================================
-// CONFIGURAÇÕES GERAIS
-// ===================================================================
-const TOOLBAR_HEIGHT = 44; // altura da barra (px)
-const UI_ID = 'multiprime-browser-ui';
-const WATCHDOG_MS = 1000; // reinjeção/garantia de visibilidade
+// Camuflagem Anti-Detecção de Bots
+Object.defineProperty(navigator, 'webdriver', { get: () => false });
+Object.defineProperty(navigator, 'plugins', {
+    get: () => [
+        { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+        { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+        { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
+    ],
+});
 
-// ===================================================================
-// SISTEMA DE INJEÇÃO DE SESSÃO
-// ===================================================================
+const originalQuery = window.navigator.permissions.query;
+window.navigator.permissions.query = (parameters) =>
+    parameters.name === 'notifications'
+        ? Promise.resolve({ state: Notification.permission })
+        : originalQuery(parameters);
+
+const { ipcRenderer } = require('electron');
+
+// ===== SISTEMA DE LOGIN AUTOMÁTICO =====
 let autoLoginCredentials = null;
+let loginAttempted = false;
 
-// Função reutilizável para injetar dados de sessão
-function injectSessionData(data, { source = 'async' } = {}) {
-  try {
-    console.log(`[PRELOAD] Injetando dados de sessão (${source})`, {
-      hasLocalStorage: !!data?.localStorage,
-      hasSessionStorage: !!data?.sessionStorage,
-      hasIndexedDB: !!data?.indexedDB
-    });
-
-    // Injetar localStorage
-    if (data?.localStorage) {
-      try {
-        Object.entries(data.localStorage).forEach(([k, v]) => localStorage.setItem(k, v));
-      } catch (err) {
-        console.error('[PRELOAD] Erro localStorage:', err);
-      }
+function fillFieldFast(field, value) {
+    if (!field || !value) return false;
+    try {
+        field.focus();
+        field.value = '';
+        field.value = value;
+        field.dispatchEvent(new Event('input', { bubbles: true }));
+        field.dispatchEvent(new Event('change', { bubbles: true }));
+        console.log(`[AUTO-LOGIN] ✅ Campo preenchido: ${field.id || field.name} = ${value}`);
+        return true;
+    } catch (error) {
+        console.error('[AUTO-LOGIN] ❌ Erro ao preencher campo:', error);
+        return false;
     }
-
-    // Injetar sessionStorage
-    if (data?.sessionStorage) {
-      try {
-        Object.entries(data.sessionStorage).forEach(([k, v]) => sessionStorage.setItem(k, v));
-      } catch (err) {
-        console.error('[PRELOAD] Erro sessionStorage:', err);
-      }
-    }
-
-    // IndexedDB (placeholder controlado no main; aqui somente log)
-    if (data?.indexedDB) {
-      console.log('[PRELOAD] IndexedDB data recebido (placeholder)');
-    }
-  } catch (e) {
-    console.warn('[PRELOAD] Falha ao injetar dados de sessão:', e);
-  }
 }
 
-// 🔸 INJEÇÃO ANTECIPADA (IPC síncrono) — roda o quanto antes no preload
-(() => {
-  try {
-    const initialData = ipcRenderer.sendSync('get-initial-session-data'); // <— síncrono
-    if (initialData && typeof initialData === 'object') {
-      injectSessionData(initialData, { source: 'sync' });
-    } else {
-      console.log('[PRELOAD] Sem dados de sessão síncronos ou payload inválido.');
-    }
-  } catch (e) {
-    console.warn('[PRELOAD] Erro no sendSync(get-initial-session-data):', e);
-  }
-})();
-
-// Listener para credenciais de auto-login
-ipcRenderer.on('set-auto-login-credentials', (event, credentials) => {
-  console.log('[AUTO-LOGIN] Credenciais recebidas no preload');
-  autoLoginCredentials = credentials;
-  if (document.readyState === 'complete') setTimeout(() => tryAutoFillLogin(), 500);
-});
-
-// Mantém fallback assíncrono (para casos em que o sync não retorne tudo)
-window.addEventListener('DOMContentLoaded', () => {
-  console.log('[PRELOAD] DOM Carregado. (fallback) solicitando dados de sessão por IPC async…');
-  ipcRenderer.send('request-session-data');
-  if (autoLoginCredentials) setTimeout(() => tryAutoFillLogin(), 1000);
-});
-
-// Recebe injeção via canal assíncrono também (reuso de função)
-ipcRenderer.on('inject-session-data', (event, data) => {
-  injectSessionData(data, { source: 'async' });
-});
-
-// ===================================================================
-// AUTO-LOGIN INTELIGENTE
-// ===================================================================
-function tryAutoFillLogin() {
-  if (!autoLoginCredentials) return;
-  console.log('[AUTO-LOGIN] Tentando preencher formulário...');
-  const usernameSelectors = [
-    'input[type="email"]',
-    'input[type="text"][name*="email" i]',
-    'input[type="text"][name*="user" i]',
-    'input[type="text"][name*="login" i]',
-    'input[id*="email" i]',
-    'input[id*="user" i]',
-    'input[id*="login" i]',
-    'input[placeholder*="email" i]',
-    'input[placeholder*="user" i]',
-    'input[autocomplete="username"]',
-    'input[autocomplete="email"]'
-  ];
-  const passwordSelectors = [
-    'input[type="password"]',
-    'input[name*="password" i]',
-    'input[id*="password" i]',
-    'input[placeholder*="password" i]',
-    'input[placeholder*="senha" i]',
-    'input[autocomplete="current-password"]'
-  ];
-
-  let u = null, p = null;
-  for (const s of usernameSelectors) { const el = document.querySelector(s); if (el && el.offsetParent !== null) { u = el; break; } }
-  for (const s of passwordSelectors) { const el = document.querySelector(s); if (el && el.offsetParent !== null) { p = el; break; } }
-  if (!(u && p)) return;
-
-  const fill = (field, value) => {
-    field.value = value;
-    field.dispatchEvent(new Event('input', { bubbles: true }));
-    field.dispatchEvent(new Event('change', { bubbles: true }));
-    field.dispatchEvent(new Event('blur', { bubbles: true }));
-  };
-  fill(u, autoLoginCredentials.usuariodaferramenta);
-  fill(p, autoLoginCredentials.senhadaferramenta);
-
-  setTimeout(() => {
-    const btns = [
-      'button[type="submit"]',
-      'input[type="submit"]',
-      'button[name*="login" i]',
-      'button[id*="login" i]'
-    ];
-    for (const s of btns) { const b = document.querySelector(s); if (b && b.offsetParent !== null) { b.click(); break; } }
-  }, 400);
-}
-
-const loginObserver = new MutationObserver(() => {
-  if (autoLoginCredentials && document.querySelector('input[type="password"]')) tryAutoFillLogin();
-});
-
-// ===================================================================
-// UI DO NAVEGADOR (Barra + Downloads + Toast + Watchdog)
-// ===================================================================
-function injectBrowserUI() {
-  if (document.getElementById(UI_ID)) return;
-
-  const uiContainer = document.createElement('div');
-  uiContainer.id = UI_ID;
-  uiContainer.style.display = 'block';
-  uiContainer.style.visibility = 'visible';
-
-  uiContainer.innerHTML = `
-    <div id="mp-titlebar" class="mp-drag">
-      <div id="mp-left" class="mp-no-drag">
-        <div id="mp-nav-controls" class="mp-no-drag" aria-label="Controles de navegação">
-          <button id="mp-back" class="mp-nav-btn" title="Voltar" aria-label="Voltar">←</button>
-          <button id="mp-forward" class="mp-nav-btn" title="Avançar" aria-label="Avançar">→</button>
-          <button id="mp-reload" class="mp-nav-btn" title="Recarregar" aria-label="Recarregar">↻</button>
-        </div>
-      </div>
-      <div id="mp-center" class="mp-no-drag">
-        <div id="mp-url-shell" role="group" aria-label="Barra de endereço">
-          <div id="mp-url-leading">
-            <img id="mp-favicon" alt="" />
-            <span id="mp-lock" title="Conexão">🔒</span>
-          </div>
-          <input
-            type="text"
-            id="mp-url-input"
-            placeholder="URL atual"
-            aria-label="Barra de endereço (somente leitura)"
-            readonly
-          />
-          <div id="mp-url-trailing">
-            <span id="mp-connection" title="Status">●</span>
-          </div>
-        </div>
-      </div>
-      <div id="mp-right" class="mp-no-drag">
-        <button id="mp-downloads-btn" class="mp-pill" aria-pressed="false" title="Downloads">
-          Downloads <span id="mp-dl-badge" class="mp-badge" aria-hidden="true" hidden>0</span>
-        </button>
-        <div id="mp-window-controls" class="mp-no-drag" aria-label="Controles da janela">
-          <button id="mp-minimize" class="mp-win-btn" title="Minimizar" aria-label="Minimizar">—</button>
-          <button id="mp-maximize" class="mp-win-btn" title="Maximizar" aria-label="Maximizar">▢</button>
-          <button id="mp-close" class="mp-win-btn mp-close" title="Fechar" aria-label="Fechar">✕</button>
-        </div>
-      </div>
-    </div>
-
-    <div id="mp-download-manager" aria-label="Gerenciador de downloads">
-      <div id="mp-download-header">
-        <div class="mp-download-title">Downloads</div>
-        <div class="mp-download-actions-right">
-          <button id="mp-clear-history" class="mp-download-action" style="display:none;">Limpar Histórico</button>
-        </div>
-      </div>
-      <div id="mp-download-live-list" aria-live="polite"></div>
-      <div id="mp-download-history" style="display:none;"></div>
-    </div>
-
-    <div id="mp-toast-container" aria-live="polite" aria-atomic="true"></div>
-  `;
-
-  const styles = document.createElement('style');
-  styles.textContent = `
-    #${UI_ID}, #${UI_ID} * { box-sizing: border-box; }
-    :root { --mp-offset: ${TOOLBAR_HEIGHT}px; }
-
-    #${UI_ID} {
-      position: fixed !important; top: 0 !important; left: 0 !important; right: 0 !important;
-      z-index: 2147483647 !important;
-      font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      pointer-events: auto !important; isolation: isolate !important;
-      display: block !important; visibility: visible !important;
-    }
-
-    #mp-titlebar {
-      height: ${TOOLBAR_HEIGHT}px;
-      display: grid; grid-template-columns: auto 1fr auto;
-      align-items: center; gap: 10px; padding: 6px 10px;
-      background: rgba(24, 24, 24, 0.92);
-      backdrop-filter: saturate(140%) blur(8px);
-      border-bottom: 1px solid rgba(255,255,255,0.06);
-      user-select: none;
-    }
-    .mp-drag { -webkit-app-region: drag; }
-    .mp-no-drag { -webkit-app-region: no-drag; }
-
-    #mp-left, #mp-right { display: flex; align-items: center; gap: 10px; }
-
-    #mp-nav-controls { display: flex; gap: 6px; }
-    .mp-nav-btn {
-      width: 32px; height: 32px; border-radius: 8px;
-      border: 1px solid rgba(255,255,255,0.08);
-      background: rgba(255,255,255,0.04);
-      color: #fff; cursor: pointer; font-size: 16px;
-      display: grid; place-items: center; transition: background .15s, border-color .15s, transform .08s;
-    }
-    .mp-nav-btn:hover { background: rgba(255,255,255,0.09); border-color: rgba(255,255,255,0.16); }
-    .mp-nav-btn:active { transform: translateY(1px); }
-
-    #mp-center { min-width: 0; }
-    #mp-url-shell {
-      display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px;
-      height: 32px; padding: 0 10px 0 8px;
-      background: rgba(32,32,32,0.95);
-      border: 1px solid rgba(255,255,255,0.07);
-      border-radius: 10px;
-    }
-    #mp-url-leading { display:flex; align-items:center; gap:6px; min-width: 0; }
-    #mp-favicon { width: 16px; height: 16px; border-radius: 3px; background: rgba(255,255,255,0.12); }
-    #mp-lock { font-size: 12px; opacity: .9; }
-    #mp-url-input {
-      width: 100%; min-width: 0; height: 28px; background: transparent; border: none; outline: none;
-      color: #f2f2f2; font-size: 13px; cursor: default;
-    }
-    #mp-url-input::placeholder { color: rgba(255,255,255,0.45); }
-    #mp-url-trailing { display:flex; align-items:center; gap:6px; }
-    #mp-connection { font-size: 10px; color: #00d084; }
-
-    #mp-downloads-btn {
-      height: 28px; padding: 0 12px; border-radius: 999px;
-      border: 1px solid rgba(255,255,255,0.08);
-      background: rgba(255,255,255,0.05); color: #fff; font-size: 12px;
-      cursor: pointer; transition: background .15s, border-color .15s, transform .08s, opacity .2s;
-    }
-    #mp-downloads-btn[aria-pressed="true"] { border-color: rgba(255,255,255,0.18); background: rgba(255,255,255,0.12); }
-    #mp-downloads-btn:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.18); }
-    .mp-badge {
-      display: inline-flex; align-items: center; justify-content: center;
-      min-width: 18px; height: 18px; padding: 0 6px;
-      margin-left: 8px; border-radius: 10px; font-size: 11px; font-weight: 600;
-      background: #0a84ff; color: #fff;
-    }
-    /* Destaque extra quando o HISTÓRICO estiver aberto */
-    #mp-downloads-btn[data-history-open="true"] { background: rgba(255,255,255,0.16); border-color: rgba(255,255,255,0.28); }
-
-    #mp-window-controls { display:flex; align-items:center; gap: 2px; margin-left: 4px; }
-    .mp-win-btn {
-      width: 38px; height: 28px; border: none; border-radius: 6px;
-      background: transparent; color: #fff; cursor: pointer; font-size: 14px;
-      display: grid; place-items: center; transition: background .12s, transform .08s;
-    }
-    .mp-win-btn:hover { background: rgba(255,255,255,0.08); }
-    .mp-win-btn:active { transform: translateY(1px); }
-    .mp-win-btn.mp-close:hover { background: #d22; }
-
-    /* Download Manager (compacto) */
-    #mp-download-manager {
-      background: rgba(0,0,0,0.96);
-      backdrop-filter: blur(10px);
-      border-bottom: 1px solid #0a0a0a;
-      max-height: 0; overflow: hidden; transition: max-height .24s ease;
-      display: block !important; visibility: visible !important;
-    }
-    #mp-download-manager.active { max-height: 220px; overflow-y: auto; }
-    #mp-download-header {
-      display:flex; align-items:center; justify-content:space-between;
-      padding: 6px 10px; border-bottom: 1px solid #2a2a2a; position: sticky; top: 0;
-      background: rgba(0,0,0,0.96); z-index:1;
-    }
-    #mp-download-header .mp-download-title { color:#fff; font-size:12px; font-weight:600; }
-    .mp-download-item { display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid #242424; }
-    .mp-download-icon { font-size: 18px; }
-    .mp-download-info { flex:1; min-width:0; }
-    .mp-download-name { color:#fff; font-size: 12px; font-weight:500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .mp-download-progress { display:flex; align-items:center; gap:6px; margin-top:4px; }
-    .mp-progress-bar { flex:1; height:3px; background:#2a2a2a; border-radius:2px; overflow:hidden; }
-    .mp-progress-fill { height:100%; background: linear-gradient(90deg,#0a84ff 0%, #00d4ff 100%); transition: width .2s ease; border-radius:2px; }
-    .mp-progress-text { color:#8a8a8a; font-size: 10px; min-width: 36px; text-align: right; }
-    .mp-download-actions { display:flex; gap:6px; }
-    .mp-download-action {
-      padding: 4px 8px; border-radius: 6px;
-      border: 1px solid #404040; background: #2a2a2a; color:#fff;
-      cursor: pointer; font-size: 11px; transition: all .12s;
-    }
-    .mp-download-action:hover { background: #3a3a3a; border-color:#0a84ff; }
-
-    html { margin:0 !important; padding:0 !important; scroll-padding-top: var(--mp-offset) !important; }
-    body {
-      margin: 0 !important;
-      padding-top: ${TOOLBAR_HEIGHT}px !important;
-      padding-bottom: max(env(safe-area-inset-bottom, 0px), 24px) !important;
-      min-height: calc(100vh - var(--mp-offset)) !important;
-      box-sizing: border-box !important;
-    }
-    html, body { overflow-y: auto !important; }
-
-    *[style*="100vh"], *[style*="100dvh"], *[style*="100svh"], *[style*="100lvh"] {
-      min-height: calc(100vh - var(--mp-offset)) !important;
-    }
-
-    #mp-toast-container {
-      position: fixed; right: 16px; bottom: 16px; z-index: 2147483648;
-      display: flex; flex-direction: column; gap: 8px; pointer-events: none;
-    }
-    .mp-toast {
-      pointer-events: auto;
-      background: rgba(32,32,32,0.95);
-      color: #fff; border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 10px; padding: 10px 12px; font-size: 12px; min-width: 220px;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
-      display: flex; align-items: center; gap: 8px;
-      transform: translateY(8px); opacity: 0;
-      transition: transform .18s ease, opacity .18s ease;
-    }
-    .mp-toast.show { transform: translateY(0); opacity: 1; }
-
-    button:focus, input:focus { outline: 2px solid #0a84ff44; outline-offset: 2px; }
-  `;
-
-  (document.head || document.documentElement).appendChild(styles);
-  (document.body || document.documentElement).prepend(uiContainer);
-
-  console.log('[UI] Barra injetada');
-  setupBrowserUIEvents();
-
-  if (document.body) {
-    loginObserver.observe(document.body, { childList: true, subtree: true });
-  }
-
-  // Correções de corte inferior e listeners
-  applyBottomSafePatch();
-  window.addEventListener('resize', debounce(applyBottomSafePatch, 120), { passive: true });
-  window.addEventListener('orientationchange', () => setTimeout(applyBottomSafePatch, 150), { passive: true });
-}
-
-// Watchdog
-let watchdogTimer = null;
-function startUIWatchdog() {
-  if (watchdogTimer) return;
-  watchdogTimer = setInterval(() => {
-    const el = document.getElementById(UI_ID);
-    if (!el || getComputedStyle(el).display === 'none') {
-      console.warn('[UI] Watchdog: reinjetando barra...');
-      injectBrowserUI();
-    } else {
-      el.style.display = 'block';
-      el.style.visibility = 'visible';
-    }
-  }, WATCHDOG_MS);
-}
-
-// ===================================================================
-// EVENTOS DA UI
-// ===================================================================
-function setupBrowserUIEvents() {
-  document.getElementById('mp-close')?.addEventListener('click', () => ipcRenderer.send('close-secure-window'));
-  document.getElementById('mp-minimize')?.addEventListener('click', () => ipcRenderer.send('minimize-secure-window'));
-  document.getElementById('mp-maximize')?.addEventListener('click', () => ipcRenderer.send('maximize-secure-window'));
-
-  document.getElementById('mp-back')?.addEventListener('click', () => ipcRenderer.send('navigate-back'));
-  document.getElementById('mp-forward')?.addEventListener('click', () => ipcRenderer.send('navigate-forward'));
-  document.getElementById('mp-reload')?.addEventListener('click', () => ipcRenderer.send('navigate-reload'));
-
-  const urlInput = document.getElementById('mp-url-input');
-  if (urlInput) {
-    urlInput.setAttribute('readonly', 'true');
-    urlInput.addEventListener('keydown', (e) => e.preventDefault());
-    urlInput.addEventListener('paste', (e) => e.preventDefault());
-  }
-  ipcRenderer.send('request-initial-url');
-
-  const downloadsBtn = document.getElementById('mp-downloads-btn');
-  if (downloadsBtn) {
-    downloadsBtn.addEventListener('click', () => {
-      const mgr = document.getElementById('mp-download-manager');
-      if (!mgr) return;
-      const active = mgr.classList.toggle('active');
-      downloadsBtn.setAttribute('aria-pressed', String(active));
-      if (active) toggleHistory(false);
-    });
-  }
-
-  document.getElementById('mp-clear-history')?.addEventListener('click', () => {
-    saveDownloadHistory([]);
-    renderHistory();
-    updateDownloadsBadge();
-  });
-}
-
-// Atualização de URL/ícone/cadeado
-ipcRenderer.on('url-updated', (event, url) => {
-  const urlInput = document.getElementById('mp-url-input');
-  const lock = document.getElementById('mp-lock');
-  const fav = document.getElementById('mp-favicon');
-  const connection = document.getElementById('mp-connection');
-
-  if (urlInput) urlInput.value = url || '';
-  try {
-    const u = new URL(url);
-    if (lock) lock.textContent = u.protocol === 'https:' ? '🔒' : '⚠️';
-    if (fav) {
-      const icon = `${u.origin}/favicon.ico`;
-      fav.src = icon;
-      fav.onerror = () => { fav.removeAttribute('src'); };
-    }
-    if (connection) {
-      connection.style.color = (u.protocol === 'https:') ? '#00d084' : '#ff9f00';
-      connection.title = (u.protocol === 'https:') ? 'Conexão segura' : 'Conexão não segura';
-    }
-  } catch {
-    if (lock) lock.textContent = '⚠️';
-  }
-
-  applyBottomSafePatch();
-});
-
-// ===================================================================
-// DOWNLOADS + TOAST
-// ===================================================================
-const DL_HISTORY_KEY = 'mp-download-history-v1';
-
-function loadDownloadHistory() { try { const raw = localStorage.getItem(DL_HISTORY_KEY); return raw ? JSON.parse(raw) : []; } catch { return []; } }
-function saveDownloadHistory(items) { try { localStorage.setItem(DL_HISTORY_KEY, JSON.stringify(items.slice(0, 500))); } catch {} }
-function addHistoryItem({ filename, path, state, finishedAt }) {
-  const items = loadDownloadHistory();
-  items.unshift({ filename, path: path || null, state, finishedAt: finishedAt || new Date().toISOString() });
-  saveDownloadHistory(items);
-}
-function humanDate(iso) { try { return new Date(iso).toLocaleString('pt-BR', { hour12: false }); } catch { return iso; } }
-
-function renderHistory() {
-  const historyEl = document.getElementById('mp-download-history');
-  if (!historyEl) return;
-  const items = loadDownloadHistory();
-  if (!items.length) {
-    historyEl.innerHTML = `
-      <div class="mp-download-item">
-        <div class="mp-download-icon">📭</div>
-        <div class="mp-download-info"><div class="mp-download-name">Sem itens no histórico</div></div>
-      </div>`;
-    return;
-  }
-  historyEl.innerHTML = items.map((it, idx) => `
-    <div class="mp-download-item" data-idx="${idx}">
-      <div class="mp-download-icon">${it.state === 'completed' ? '✅' : '❌'}</div>
-      <div class="mp-download-info">
-        <div class="mp-download-name" title="${sanitizeText(it.filename)}">${sanitizeText(it.filename)}</div>
-        <div class="mp-download-progress" style="margin-top:4px;">
-          <div class="mp-progress-text">${humanDate(it.finishedAt)}</div>
-        </div>
-      </div>
-      <div class="mp-download-actions">
-        <button class="mp-download-action" data-action="open" ${it.path ? '' : 'disabled'}>Abrir</button>
-        <button class="mp-download-action" data-action="show" ${it.path ? '' : 'disabled'}>Mostrar</button>
-      </div>
-    </div>
-  `).join('');
-
-  historyEl.querySelectorAll('.mp-download-item').forEach(row => {
-    const idx = Number(row.getAttribute('data-idx'));
-    const item = loadDownloadHistory()[idx];
-    row.querySelector('[data-action="open"]')?.addEventListener('click', () => { if (item?.path) ipcRenderer.send('open-download', item.path); });
-    row.querySelector('[data-action="show"]')?.addEventListener('click', () => { if (item?.path) ipcRenderer.send('show-download-in-folder', item.path); });
-  });
-}
-
-function toggleHistory(show) {
-  const historyEl    = document.getElementById('mp-download-history');
-  const liveEl       = document.getElementById('mp-download-live-list');
-  const clearBtn     = document.getElementById('mp-clear-history');
-  const mgr          = document.getElementById('mp-download-manager');
-  const downloadsBtn = document.getElementById('mp-downloads-btn');
-  if (!historyEl || !liveEl) return;
-
-  const willShow = typeof show === 'boolean' ? show : (historyEl.style.display === 'none');
-
-  historyEl.style.display = willShow ? 'block' : 'none';
-  liveEl.style.display    = willShow ? 'none'  : 'block';
-  if (clearBtn) clearBtn.style.display = willShow ? 'inline-block' : 'none';
-
-  if (mgr) mgr.classList.add('active');
-
-  if (downloadsBtn) {
-    downloadsBtn.setAttribute('data-history-open', String(willShow));
-    if (willShow) downloadsBtn.setAttribute('aria-pressed', 'true');
-  }
-
-  if (willShow) renderHistory();
-}
-
-function updateDownloadsBadge() {
-  const badge = document.getElementById('mp-dl-badge');
-  if (!badge) return;
-  const activeCount = activeDownloads.size;
-  const historyCount = loadDownloadHistory().length;
-  const total = activeCount || historyCount || 0;
-  if (total > 0) {
-    badge.textContent = String(activeCount || historyCount);
-    badge.hidden = false;
-  } else {
-    badge.hidden = true;
-  }
-}
-
-function showToast(message, { actions = [] } = {}) {
-  const container = document.getElementById('mp-toast-container');
-  if (!container) return;
-  const el = document.createElement('div');
-  el.className = 'mp-toast';
-  el.innerHTML = `
-    <div class="mp-toast-icon">📥</div>
-    <div class="mp-toast-text">${message}</div>
-    <div class="mp-toast-actions"></div>
-  `;
-  const actionsEl = el.querySelector('.mp-toast-actions');
-  actions.forEach(({ label, onClick }) => {
-    const btn = document.createElement('button');
-    btn.textContent = label;
-    btn.addEventListener('click', (e) => { e.stopPropagation(); onClick?.(); removeToast(); });
-    actionsEl.appendChild(btn);
-  });
-  container.appendChild(el);
-  requestAnimationFrame(() => el.classList.add('show'));
-  const removeToast = () => { el.classList.remove('show'); setTimeout(() => el.remove(), 180); };
-  const t = setTimeout(removeToast, 4000);
-  el.addEventListener('mouseenter', () => clearTimeout(t));
-  el.addEventListener('mouseleave', () => setTimeout(removeToast, 1500));
-}
-
-const activeDownloads = new Map();
-const downloadManager = () => document.getElementById('mp-download-manager');
-const liveList = () => document.getElementById('mp-download-live-list');
-
-ipcRenderer.on('download-started', (event, { id, filename }) => {
-  console.log('[DOWNLOAD] Iniciado:', filename);
-  const mgr = downloadManager(); if (mgr) mgr.classList.add('active');
-
-  const btn = document.getElementById('mp-downloads-btn');
-  if (btn) btn.setAttribute('aria-pressed', 'true');
-
-  showToast(`Download iniciado: <strong>${sanitizeText(filename)}</strong>`, {
-    actions: [{ label: 'Ver', onClick: () => { const mgrEl = downloadManager(); if (mgrEl) mgrEl.classList.add('active'); } }]
-  });
-
-  const list = liveList(); if (!list) return;
-  const row = document.createElement('div');
-  row.className = 'mp-download-item';
-  row.id = `download-${id}`;
-  row.innerHTML = `
-    <div class="mp-download-icon">📥</div>
-    <div class="mp-download-info">
-      <div class="mp-download-name">${sanitizeText(filename)}</div>
-      <div class="mp-download-progress">
-        <div class="mp-progress-bar"><div class="mp-progress-fill" style="width:0%"></div></div>
-        <div class="mp-progress-text">0%</div>
-      </div>
-    </div>
-    <div class="mp-download-actions" style="display:none;">
-      <button class="mp-download-action" data-action="open">Abrir</button>
-      <button class="mp-download-action" data-action="show">Mostrar</button>
-    </div>
-  `;
-  list.appendChild(row);
-  activeDownloads.set(id, { filename, element: row, path: null });
-
-  const mgrEl = downloadManager();
-  if (mgrEl) mgrEl.classList.add('active');
-  updateDownloadsBadge();
-});
-
-ipcRenderer.on('download-progress', (event, { id, progress }) => {
-  const d = activeDownloads.get(id);
-  if (d) {
-    const fill = d.element.querySelector('.mp-progress-fill');
-    const txt = d.element.querySelector('.mp-progress-text');
-    if (fill) fill.style.width = `${progress}%`;
-    if (txt) txt.textContent = `${progress}%`;
-  }
-});
-
-ipcRenderer.on('download-complete', (event, { id, state, path }) => {
-  const d = activeDownloads.get(id);
-  if (d) {
-    d.path = path;
-    const icon = d.element.querySelector('.mp-download-icon');
-    const fill = d.element.querySelector('.mp-progress-fill');
-    const txt = d.element.querySelector('.mp-download-progress .mp-progress-text');
-    const actions = d.element.querySelector('.mp-download-actions');
-
-    if (state === 'completed') {
-      if (icon) icon.textContent = '✅';
-      if (fill) fill.style.width = '100%';
-      if (txt) txt.textContent = '100%';
-      if (actions) {
-        actions.style.display = 'flex';
-        actions.querySelector('[data-action="open"]')?.addEventListener('click', () => ipcRenderer.send('open-download', path));
-        actions.querySelector('[data-action="show"]')?.addEventListener('click', () => ipcRenderer.send('show-download-in-folder', path));
-      }
-      addHistoryItem({ filename: d.filename, path, state: 'completed', finishedAt: new Date().toISOString() });
-    } else {
-      if (icon) icon.textContent = '❌';
-      if (txt) txt.textContent = 'Falhou';
-      addHistoryItem({ filename: d.filename, path: null, state: 'failed', finishedAt: new Date().toISOString() });
-    }
-
-    setTimeout(() => {
-      d.element.style.opacity = '0';
-      d.element.style.transition = 'opacity .4s';
-      setTimeout(() => {
-        d.element.remove();
-        activeDownloads.delete(id);
-        const mgr = downloadManager();
-        const historyShown = document.getElementById('mp-download-history')?.style.display === 'block';
-        if (mgr && !historyShown && activeDownloads.size === 0) {
-          const downloadsBtn = document.getElementById('mp-downloads-btn');
-          if (downloadsBtn?.getAttribute('aria-pressed') !== 'true') mgr.classList.remove('active');
+function performAutoLogin() {
+    if (!autoLoginCredentials || loginAttempted) return;
+    const { usuariodaferramenta, senhadaferramenta } = autoLoginCredentials;
+    console.log('[AUTO-LOGIN] 🚀 Iniciando login automático...');
+    
+    const emailField = document.querySelector('input[id="amember-login"]') || 
+                      document.querySelector('input[name="amember_login"]') ||
+                      document.querySelector('input[type="email"]') ||
+                      document.querySelector('input[placeholder*="Username" i]');
+                      
+    const passwordField = document.querySelector('input[id="amember-pass"]') || 
+                         document.querySelector('input[name="amember_pass"]') ||
+                         document.querySelector('input[type="password"]');
+    
+    if (emailField && passwordField) {
+        const emailFilled = fillFieldFast(emailField, usuariodaferramenta);
+        const passwordFilled = fillFieldFast(passwordField, senhadaferramenta);
+        
+        if (emailFilled && passwordFilled) {
+            loginAttempted = true;
+            setTimeout(() => {
+                const submitButton = document.querySelector('input[type="submit"]') ||
+                                   document.querySelector('button[type="submit"]');
+                if (submitButton) submitButton.click();
+            }, 300);
         }
-        updateDownloadsBadge();
-      }, 400);
-    }, 8000);
-  } else {
-    updateDownloadsBadge();
-  }
-});
-
-// Sanitização simples
-function sanitizeText(str) {
-  try { return String(str).replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
-  catch { return str; }
+    }
 }
 
-// ===================================================================
-// ANTI-SOBREPOSIÇÃO (headers/modais fixed/sticky) — top only
-// ===================================================================
+ipcRenderer.on('set-auto-login-credentials', (event, credentials) => {
+    autoLoginCredentials = credentials;
+    loginAttempted = false;
+    setTimeout(() => performAutoLogin(), 1500);
+});
+
+window.addEventListener('load', () => setTimeout(performAutoLogin, 2000));
+document.addEventListener('DOMContentLoaded', () => setTimeout(performAutoLogin, 1000));
+
+// ===== INJEÇÃO DE SESSÃO =====
+ipcRenderer.on('inject-session-data', (event, sessionData) => {
+    (async () => {
+        try {
+            if (sessionData && typeof sessionData === 'object') {
+                if (sessionData.localStorage) {
+                    for (const [key, value] of Object.entries(sessionData.localStorage)) {
+                        window.localStorage.setItem(key, value);
+                    }
+                }
+                if (sessionData.sessionStorage) {
+                    for (const [key, value] of Object.entries(sessionData.sessionStorage)) {
+                        window.sessionStorage.setItem(key, value);
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('[PRELOAD] Erro ao injetar dados da sessão:', err);
+        }
+    })();
+});
+
+ipcRenderer.send('request-session-data');
+
+console.log('%c[PRELOAD SCRIPT] Moderno e Funcionando!', 'color: #00FF00; font-size: 16px;');
+
+// ===== BARRA MODERNA OTIMIZADA =====
+
 (() => {
-  const OFFSET = TOOLBAR_HEIGHT;
-  const adjusted = new WeakSet();
-  const isInside = (el) => !!el.closest(`#${UI_ID}`);
-  const shouldSkip = (el) => !el || el.nodeType !== 1 || isInside(el) || (() => {
-    const r = el.getBoundingClientRect?.(); return !r || (r.width === 0 && r.height === 0);
-  })();
+    const TITLE_BAR_HEIGHT = 44; // ALTURA ATUALIZADA
+    const CONTAINER_ID = 'multiprime-browser-ui'; // ID ATUALIZADO
+    let isInitialized = false;
+    const downloads = new Map();
+    let container = null;
+    let shadowRoot = null;
 
-  function bump(el) {
-    if (shouldSkip(el) || adjusted.has(el)) return;
-    const cs = getComputedStyle(el);
-    const pos = cs.position;
-    if (pos !== 'fixed' && pos !== 'sticky') return;
+    function createTitleBar() {
+        if (isInitialized || document.getElementById(CONTAINER_ID)) return;
+        isInitialized = true;
 
-    // Ajuste apenas para colisões superiores
-    const topStr = cs.top;
-    const topIsAuto = topStr === 'auto';
-    const topPx = topIsAuto ? NaN : parseFloat(topStr || '0');
-    const collidesByTop = (!isNaN(topPx) && topPx <= OFFSET + 0.5) || (pos === 'sticky' && (topIsAuto || topStr === '0px'));
-    const isBottomAnchored = cs.bottom === '0px'; // não mexer em footers
+        try {
+            container = document.createElement('div');
+            container.id = CONTAINER_ID;
+            container.setAttribute('data-secure-browser', 'true');
+            
+            container.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: ${TITLE_BAR_HEIGHT}px;
+                z-index: 2147483647;
+                pointer-events: none;
+                isolation: isolate;
+                display: block !important;
+                visibility: visible !important;
+            `;
 
-    if (collidesByTop && !isBottomAnchored) {
-      if (!isNaN(topPx)) {
-        el.style.top = (topPx + OFFSET) + 'px';
-      } else {
-        const t = cs.transform === 'none' ? '' : cs.transform;
-        el.style.transform = `translateY(${OFFSET}px) ${t.includes('matrix') || t.includes('translate') ? '' : t}`.trim();
-        el.style.willChange = 'transform';
-      }
-      el.style.setProperty('scroll-margin-top', `${OFFSET}px`, 'important');
-      adjusted.add(el);
+            shadowRoot = container.attachShadow({ mode: 'closed' });
+
+            const style = document.createElement('style');
+            style.textContent = `
+                :host { 
+                    all: initial; 
+                    display: block !important; 
+                    position: fixed !important; 
+                    top: 0 !important; 
+                    left: 0 !important; 
+                    width: 100% !important; 
+                    height: ${TITLE_BAR_HEIGHT}px !important; 
+                }
+                
+                .bar { 
+                    width: 100%; 
+                    height: 100%; 
+                    background: rgba(24, 24, 24, 0.92);
+                    backdrop-filter: saturate(140%) blur(8px);
+                    display: grid;
+                    grid-template-columns: auto 1fr auto;
+                    align-items: center; 
+                    gap: 10px; 
+                    padding: 6px 10px; 
+                    box-sizing: border-box; 
+                    border-bottom: 1px solid rgba(255,255,255,0.06); 
+                    -webkit-app-region: drag; 
+                    pointer-events: auto; 
+                    font: 13px Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; 
+                    color: #ecf0f1; 
+                    user-select: none; 
+                }
+                
+                .bar * { -webkit-app-region: no-drag; pointer-events: auto; }
+                
+                .group { display: flex; align-items: center; gap: 8px; }
+                
+                .nav { 
+                    width: 32px; 
+                    height: 32px; 
+                    background: rgba(255,255,255,0.04); 
+                    color: #fff; 
+                    border: 1px solid rgba(255,255,255,0.08); 
+                    border-radius: 8px; 
+                    cursor: pointer; 
+                    font-size: 16px; 
+                    display: grid; 
+                    place-items: center; 
+                    transition: background 0.15s, border-color 0.15s; 
+                    padding: 0; 
+                    margin: 0; 
+                }
+                .nav:hover { background: rgba(255,255,255,0.09); border-color: rgba(255,255,255,0.16); }
+                
+                .url-box { 
+                    flex: 1; 
+                    display: grid;
+                    grid-template-columns: auto 1fr auto;
+                    align-items: center; 
+                    gap: 8px; 
+                    padding: 0 10px 0 8px;
+                    height: 32px;
+                    background: rgba(32,32,32,0.95);
+                    border: 1px solid rgba(255,255,255,0.07);
+                    border-radius: 10px;
+                }
+                
+                .url-leading { display: flex; align-items: center; gap: 6px; }
+                .favicon { width: 16px; height: 16px; border-radius: 3px; }
+                .lock { font-size: 12px; opacity: 0.9; }
+                
+                .status { width: 8px; height: 8px; border-radius: 50%; background: ${navigator.onLine ? '#00d084' : '#e74c3c'}; }
+                
+                .url { 
+                    flex: 1; 
+                    height: 28px; 
+                    background: transparent; 
+                    border: none; 
+                    color: #f2f2f2; 
+                    padding: 0; 
+                    font-size: 13px; 
+                    text-align: left; 
+                    outline: none; 
+                }
+                
+                button { 
+                    width: 32px; 
+                    height: 32px; 
+                    background: transparent; 
+                    color: #ecf0f1; 
+                    border: none; 
+                    border-radius: 6px; 
+                    cursor: pointer; 
+                    display: flex; 
+                    align-items: center; 
+                    justify-content: center; 
+                    font-size: 16px; 
+                    transition: background 0.15s; 
+                    padding: 0; 
+                    margin: 0; 
+                }
+                button:hover { background: rgba(255,255,255,0.1); }
+                button.close:hover { background: #e74c3c; }
+                
+                .downloads-btn {
+                    height: 28px;
+                    padding: 0 12px;
+                    border-radius: 999px;
+                    border: 1px solid rgba(255,255,255,0.08);
+                    background: rgba(255,255,255,0.05);
+                    font-size: 12px;
+                    width: auto;
+                }
+                
+                .downloads-menu { 
+                    display: none; 
+                    position: absolute; 
+                    top: 100%; 
+                    right: 10px; 
+                    width: 330px; 
+                    max-height: 450px; 
+                    background: rgba(0,0,0,0.96); 
+                    border: 1px solid #2a2a2a; 
+                    border-radius: 8px; 
+                    box-shadow: 0 8px 20px rgba(0,0,0,0.35); 
+                    overflow-y: auto; 
+                    color: #ecf0f1; 
+                    font-size: 13px; 
+                    padding: 8px; 
+                    box-sizing: border-box; 
+                }
+                .downloads-menu.open { display: block; }
+                .downloads-menu:empty::before { 
+                    content: 'Nenhum download iniciado'; 
+                    display: block; 
+                    text-align: center; 
+                    padding: 20px; 
+                    color: #bdc3c7; 
+                }
+                
+                .dl-item { padding: 10px; border-bottom: 1px solid #2c3e50; }
+                .dl-item:last-child { border-bottom: none; }
+                .dl-info { display: flex; justify-content: space-between; margin-bottom: 6px; }
+                .dl-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+                .dl-progress { height: 5px; background: rgba(0,0,0,0.3); border-radius: 3px; overflow: hidden; }
+                .dl-bar { height: 100%; background: #3498db; transition: width 0.3s; }
+                .dl-bar.done { background: #2ecc71; }
+                .dl-actions { margin-top: 8px; display: flex; gap: 15px; font-size: 12px; }
+                .dl-action { color: #3498db; cursor: pointer; text-decoration: none; }
+                .dl-action:hover { color: #5dade2; text-decoration: underline; }
+                
+                .notification-popup {
+                    position: fixed;
+                    bottom: 20px;
+                    right: -400px;
+                    background: rgba(32,32,32,0.95);
+                    color: #ecf0f1;
+                    padding: 10px 12px;
+                    border-radius: 10px;
+                    border: 1px solid rgba(255,255,255,0.08);
+                    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+                    z-index: 2147483647;
+                    font-size: 12px;
+                    transition: right 0.4s cubic-bezier(0.68, -0.55, 0.27, 1.55);
+                    pointer-events: none;
+                }
+                .notification-popup.visible { right: 20px; }
+            `;
+            shadowRoot.appendChild(style);
+
+            const bar = document.createElement('div');
+            bar.className = 'bar';
+            bar.innerHTML = `
+                <div class="group">
+                    <button class="nav" data-action="back">←</button>
+                    <button class="nav" data-action="forward">→</button>
+                    <button class="nav" data-action="reload">↻</button>
+                </div>
+                <div class="url-box">
+                    <div class="url-leading">
+                        <img class="favicon" alt="" />
+                        <span class="lock">🔒</span>
+                    </div>
+                    <input type="text" class="url" readonly>
+                    <div class="status"></div>
+                </div>
+                <div class="group">
+                    <button class="downloads-btn" data-action="downloads">Downloads</button>
+                    <button data-action="minimize">−</button>
+                    <button data-action="maximize">☐</button>
+                    <button class="close" data-action="close">×</button>
+                </div>
+                <div class="downloads-menu"></div>
+            `;
+            shadowRoot.appendChild(bar);
+
+            if (document.body) document.body.appendChild(container);
+            else document.documentElement.appendChild(container);
+
+            applyLayoutAdjustment();
+            setupEvents();
+            setupIpcListeners();
+            ipcRenderer.send('request-initial-url');
+            setupDomMonitoring();
+
+        } catch (error) {
+            console.error('[SECURE BROWSER] Erro ao criar barra:', error);
+        }
     }
-  }
 
-  function scan(root) {
-    if (root.querySelectorAll) {
-      root.querySelectorAll([
-        '[class*="modal"]','[class*="popup"]','[class*="dialog"]','[class*="drawer"]',
-        '[class*="toast"]','[class*="banner"]','[class*="header"]','[class*="fixed"]',
-        '[data-modal]','[role="dialog"]','[role="alertdialog"]','[role="banner"]','[role="tooltip"]'
-      ].join(',')).forEach(bump);
-    }
-    bump(root);
-  }
-
-  const obs = new MutationObserver((muts) => muts.forEach(m => {
-    if (m.type === 'childList') m.addedNodes.forEach(scan);
-    else if (m.type === 'attributes') bump(m.target);
-  }));
-
-  function start() {
-    if (!document.body) return;
-    obs.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class','style'] });
-    scan(document.body);
-  }
-
-  ['load','resize','orientationchange'].forEach(evt => {
-    window.addEventListener(evt, () => { if (document.body) scan(document.body); }, { passive: true });
-  });
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
-  else start();
-})();
-
-// ===================================================================
-// PATCH CONTRA “CORTE” INFERIOR (Bottom-Safe)
-// ===================================================================
-function applyBottomSafePatch() {
-  try {
-    const doc = document.documentElement;
-    const body = document.body || document.documentElement;
-
-    const scrollH = doc.scrollHeight;
-    const innerH  = window.innerHeight;
-    const cssHtml = getComputedStyle(doc);
-    const cssBody = getComputedStyle(body);
-    const overflowLocked = (cssHtml.overflowY === 'hidden' || cssBody.overflowY === 'hidden');
-
-    if (overflowLocked && scrollH > innerH + 4) {
-      doc.style.overflowY = 'auto';
-      body.style.overflowY = 'auto';
+    function showNotification(text) {
+        if (!shadowRoot) return;
+        const notif = document.createElement('div');
+        notif.className = 'notification-popup';
+        notif.textContent = text;
+        shadowRoot.appendChild(notif);
+        requestAnimationFrame(() => notif.classList.add('visible'));
+        setTimeout(() => {
+            notif.classList.remove('visible');
+            setTimeout(() => {
+                if (notif.parentNode === shadowRoot) shadowRoot.removeChild(notif);
+            }, 400);
+        }, 3000);
     }
 
-    body.style.minHeight = `calc(100vh - ${TOOLBAR_HEIGHT}px)`;
+    function applyLayoutAdjustment() {
+        let styleEl = document.getElementById('multiprime-layout-adjust');
+        if (!styleEl) {
+            styleEl = document.createElement('style');
+            styleEl.id = 'multiprime-layout-adjust';
+            (document.head || document.documentElement).appendChild(styleEl);
+        }
+        
+        // Correção específica para sites problemáticos
+        const hostname = window.location.hostname;
+        const isVectorizer = hostname.includes('vectorizer');
+        const isMotionArray = hostname.includes('motionarray');
+        const isProblematicSite = isVectorizer || isMotionArray || 
+                                  hostname.includes('placeit') ||
+                                  hostname.includes('canva');
+        
+        console.log(`[TOOLBAR] Aplicando layout para: ${hostname} (isVectorizer: ${isVectorizer})`);
+        
+        if (isVectorizer) {
+            // Vectorizer: Abordagem minimalista - APENAS o container principal
+            styleEl.textContent = `
+                :root { --toolbar-offset: ${TITLE_BAR_HEIGHT}px; }
+                
+                /* HTML e BODY naturais sem modificação */
+                html, body { 
+                    margin: 0 !important;
+                    padding: 0 !important;
+                }
+                
+                /* Ajusta APENAS o container principal */
+                #App-App {
+                    top: ${TITLE_BAR_HEIGHT}px !important;
+                }
+                
+                /* Scroll padding */
+                * {
+                    scroll-padding-top: ${TITLE_BAR_HEIGHT}px !important;
+                }
+            `;
+            console.log('[TOOLBAR] CSS minimalista aplicado - sem sobreposições!');
+        } else if (isMotionArray) {
+            // MotionArray: usa padding-top no body
+            styleEl.textContent = `
+                :root { --toolbar-offset: ${TITLE_BAR_HEIGHT}px; }
+                body { 
+                    padding-top: ${TITLE_BAR_HEIGHT}px !important; 
+                    min-height: calc(100vh - ${TITLE_BAR_HEIGHT}px) !important;
+                    box-sizing: border-box !important;
+                    margin: 0 !important;
+                }
+                [style*="position: fixed"][style*="top: 0"],
+                [style*="position:fixed"][style*="top:0"] {
+                    top: ${TITLE_BAR_HEIGHT}px !important;
+                }
+            `;
+            console.log('[TOOLBAR] CSS do MotionArray aplicado!');
+        } else if (isProblematicSite) {
+            // Para outros sites problemáticos
+            styleEl.textContent = `
+                :root { --toolbar-offset: ${TITLE_BAR_HEIGHT}px; }
+                body { 
+                    padding-top: ${TITLE_BAR_HEIGHT}px !important; 
+                    min-height: calc(100vh - ${TITLE_BAR_HEIGHT}px) !important;
+                    box-sizing: border-box !important;
+                    margin-top: 0 !important;
+                }
+                body > *:first-child {
+                    margin-top: 0 !important;
+                }
+                [style*="position: fixed"][style*="top: 0"],
+                [style*="position:fixed"][style*="top:0"] {
+                    top: ${TITLE_BAR_HEIGHT}px !important;
+                }
+            `;
+        } else {
+            // Para sites normais, usar o método padrão
+            styleEl.textContent = `
+                :root { --toolbar-offset: ${TITLE_BAR_HEIGHT}px; } 
+                html { 
+                    position: relative !important; 
+                    top: var(--toolbar-offset) !important; 
+                    height: calc(100vh - var(--toolbar-offset)) !important; 
+                    overflow-y: auto !important; 
+                } 
+                body { 
+                    min-height: 100% !important; 
+                    height: auto !important; 
+                }
+            `;
+        }
+    }
 
-    const existingPB = parseInt(cssBody.paddingBottom || '0', 10) || 0;
-    if (existingPB < 24) body.style.paddingBottom = `max(env(safe-area-inset-bottom, 0px), 24px)`;
+    function setupDomMonitoring() {
+        const observer = new MutationObserver(() => {
+            if (!document.getElementById(CONTAINER_ID)) { isInitialized = false; createTitleBar(); }
+            if (!document.getElementById('multiprime-layout-adjust')) applyLayoutAdjustment();
+            adjustFixedElements(); // Ajusta elementos fixed/sticky continuamente
+        });
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+        
+        // Ajusta imediatamente e depois periodicamente
+        adjustFixedElements();
+        
+        // Intervalo mais curto para sites problemáticos
+        const hostname = window.location.hostname;
+        const interval = (hostname.includes('vectorizer') || hostname.includes('motionarray')) ? 1000 : 2000;
+        setInterval(adjustFixedElements, interval);
+    }
+    
+    function adjustFixedElements() {
+        const hostname = window.location.hostname;
+        const isVectorizer = hostname.includes('vectorizer');
+        
+        if (isVectorizer) {
+            // Para Vectorizer, ajustar apenas o container principal da app
+            const appContainer = document.getElementById('App-App');
+            if (appContainer) {
+                const style = window.getComputedStyle(appContainer);
+                if (style.position === 'fixed') {
+                    const currentTop = parseFloat(style.top) || 0;
+                    if (currentTop < TITLE_BAR_HEIGHT && !appContainer.hasAttribute('data-toolbar-adjusted')) {
+                        appContainer.style.setProperty('top', `${TITLE_BAR_HEIGHT}px`, 'important');
+                        appContainer.setAttribute('data-toolbar-adjusted', 'true');
+                        console.log('[TOOLBAR] ✅ Container principal ajustado para', TITLE_BAR_HEIGHT, 'px');
+                    }
+                }
+            }
+            return; // Para Vectorizer, só isso
+        }
+        
+        // Para outros sites, usar método normal
+        const selectors = [
+            'header', 'nav', '[role="banner"]', '[role="navigation"]',
+            '[class*="header"]', '[class*="Header"]', '[class*="navbar"]', 
+            '[class*="nav-bar"]', '[class*="topbar"]', '[class*="top-bar"]',
+            '[class*="toolbar"]', '[class*="Toolbar"]',
+            '[style*="position: fixed"]', '[style*="position:fixed"]',
+            '[style*="position: sticky"]', '[style*="position:sticky"]'
+        ];
+        
+        document.querySelectorAll(selectors.join(',')).forEach(el => {
+            if (el.id === CONTAINER_ID || el.closest(`#${CONTAINER_ID}`)) return;
+            if (el.hasAttribute('data-adjusted-by-toolbar')) return;
+            
+            try {
+                const style = window.getComputedStyle(el);
+                const position = style.position;
+                
+                if (position === 'fixed' || position === 'sticky') {
+                    const currentTop = parseFloat(style.top) || 0;
+                    const threshold = 5;
+                    
+                    if (currentTop >= -5 && currentTop < threshold) {
+                        const newTop = TITLE_BAR_HEIGHT + Math.max(0, currentTop);
+                        el.style.setProperty('top', `${newTop}px`, 'important');
+                        el.setAttribute('data-adjusted-by-toolbar', 'true');
+                        console.log(`[TOOLBAR] Ajustado elemento:`, el.className || el.tagName, `de ${currentTop}px para ${newTop}px`);
+                    }
+                }
+            } catch (e) {}
+        });
+    }
+    
+    function setupEvents() {
+        if (!shadowRoot) return;
+        shadowRoot.querySelector('.bar').addEventListener('click', (e) => {
+            const button = e.target.closest('button[data-action]');
+            if (!button) return;
+            e.stopPropagation(); e.preventDefault();
+            const action = button.dataset.action;
+            switch (action) {
+                case 'back': ipcRenderer.send('navigate-back'); break;
+                case 'forward': ipcRenderer.send('navigate-forward'); break;
+                case 'reload': ipcRenderer.send('navigate-reload'); break;
+                case 'downloads': shadowRoot.querySelector('.downloads-menu').classList.toggle('open'); break;
+                case 'minimize': ipcRenderer.send('minimize-secure-window'); break;
+                case 'maximize': ipcRenderer.send('maximize-secure-window'); break;
+                case 'close': ipcRenderer.send('close-secure-window'); break;
+            }
+        });
+        shadowRoot.addEventListener('click', (e) => {
+            if (!e.target.closest('.downloads-menu') && !e.target.closest('[data-action="downloads"]')) {
+                shadowRoot.querySelector('.downloads-menu').classList.remove('open');
+            }
+        });
+        const updateStatus = () => { if(shadowRoot) { const s = shadowRoot.querySelector('.status'); if(s) s.style.background = navigator.onLine ? '#00d084' : '#e74c3c'; } };
+        window.addEventListener('online', updateStatus);
+        window.addEventListener('offline', updateStatus);
+    }
+    
+    function setupIpcListeners() {
+        ipcRenderer.on('url-updated', (event, url) => {
+            if (shadowRoot) { 
+                const urlInput = shadowRoot.querySelector('.url'); 
+                if (urlInput) urlInput.value = url; 
+                
+                // Atualizar favicon e lock
+                try {
+                    const u = new URL(url);
+                    const lock = shadowRoot.querySelector('.lock');
+                    const fav = shadowRoot.querySelector('.favicon');
+                    
+                    if (lock) lock.textContent = u.protocol === 'https:' ? '🔒' : '⚠️';
+                    if (fav) {
+                        fav.src = `${u.origin}/favicon.ico`;
+                        fav.onerror = () => fav.removeAttribute('src');
+                    }
+                } catch(e) {}
+            }
+            
+            // Reaplica ajustes de layout quando a URL muda
+            setTimeout(() => {
+                applyLayoutAdjustment();
+                adjustFixedElements();
+            }, 500);
+        });
+        ipcRenderer.on('download-started', (event, { id, filename }) => {
+            downloads.set(id, { filename, progress: 0, state: 'active' });
+            updateDownloadsUI();
+            showNotification(`Download iniciado: ${filename}`);
+        });
+        ipcRenderer.on('download-progress', (event, { id, progress }) => {
+            const download = downloads.get(id);
+            if (download?.state === 'active') { download.progress = progress; updateDownloadsUI(); }
+        });
+        ipcRenderer.on('download-complete', (event, { id, state, path }) => {
+            const download = downloads.get(id);
+            if (download) { download.state = state; download.path = path; download.progress = (state === 'completed') ? 100 : download.progress; updateDownloadsUI(); }
+        });
+    }
 
-    document.querySelectorAll('*[style*="100vh"], *[style*="100dvh"], *[style*="100svh"], *[style*="100lvh"]').forEach(el => {
-      if (el.id && (el.id.includes('modal') || el.id.includes('dialog'))) return;
-      el.style.minHeight = `calc(100vh - ${TOOLBAR_HEIGHT}px)`;
+    function updateDownloadsUI() {
+        if (!shadowRoot) return;
+        const menu = shadowRoot.querySelector('.downloads-menu');
+        if (!menu) return;
+        menu.innerHTML = '';
+        downloads.forEach((dl) => {
+            const item = document.createElement('div');
+            item.className = 'dl-item';
+            let status = `${dl.progress}%`;
+            if (dl.state === 'completed') status = 'Concluído'; 
+            else if (dl.state === 'cancelled') status = 'Cancelado'; 
+            else if (dl.state === 'interrupted') status = 'Falha';
+            item.innerHTML = `<div class="dl-info"><span class="dl-name" title="${dl.filename}">${dl.filename}</span><span>${status}</span></div><div class="dl-progress"><div class="dl-bar ${dl.state === 'completed' ? 'done' : ''}" style="width: ${dl.progress}%"></div></div>`;
+            if (dl.state === 'completed' && dl.path) {
+                const actions = document.createElement('div');
+                actions.className = 'dl-actions';
+                actions.innerHTML = `<a class="dl-action" data-path="${dl.path}" data-action="open">Abrir</a><a class="dl-action" data-path="${dl.path}" data-action="show">Mostrar na pasta</a>`;
+                actions.addEventListener('click', (e) => {
+                    const target = e.target.closest('.dl-action');
+                    if(target) ipcRenderer.send(target.dataset.action === 'open' ? 'open-download' : 'show-download-in-folder', target.dataset.path);
+                });
+                item.appendChild(actions);
+            }
+            menu.appendChild(item);
+        });
+    }
+    
+    if (document.readyState === 'interactive' || document.readyState === 'complete') {
+        createTitleBar();
+    } else {
+        document.addEventListener('DOMContentLoaded', createTitleBar, { once: true });
+    }
+    
+    // Ajustes adicionais quando tudo carregar
+    window.addEventListener('load', () => {
+        setTimeout(() => {
+            applyLayoutAdjustment();
+            adjustFixedElements();
+        }, 500);
     });
-
-  } catch (e) {
-    console.warn('[BottomSafe] falha ao aplicar patch:', e);
-  }
-}
-
-function debounce(fn, ms) {
-  let t = null;
-  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
-}
-
-// ===================================================================
-// INICIALIZAÇÃO + WATCHDOG
-// ===================================================================
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => { injectBrowserUI(); startUIWatchdog(); }, { once: true });
-} else {
-  injectBrowserUI(); startUIWatchdog();
-}
-window.addEventListener('load', () => {
-  if (!document.getElementById(UI_ID)) injectBrowserUI();
-  applyBottomSafePatch();
-});
-
-// ===================================================================
-// API EXPOSTA
-// ===================================================================
-contextBridge.exposeInMainWorld('electronAPI', {
-  // Navegação
-  navigateBack:   () => ipcRenderer.send('navigate-back'),
-  navigateForward:() => ipcRenderer.send('navigate-forward'),
-  navigateReload: () => ipcRenderer.send('navigate-reload'),
-  navigateToUrl:  (url) => ipcRenderer.send('navigate-to-url', url),
-
-  // Janela
-  minimizeWindow: () => ipcRenderer.send('minimize-secure-window'),
-  maximizeWindow: () => ipcRenderer.send('maximize-secure-window'),
-  closeWindow:    () => ipcRenderer.send('close-secure-window'),
-
-  // Downloads
-  openDownload:         (path) => ipcRenderer.send('open-download', path),
-  showDownloadInFolder: (path) => ipcRenderer.send('show-download-in-folder', path),
-
-  // Histórico de downloads
-  getDownloadHistory:   () => loadDownloadHistory(),
-  clearDownloadHistory: () => { saveDownloadHistory([]); renderHistory(); },
-  showDownloadHistory:  () => { const mgr = document.getElementById('mp-download-manager'); if (mgr) mgr.classList.add('active'); toggleHistory(true); },
-
-  // Listeners
-  onUrlUpdated:       (cb) => ipcRenderer.on('url-updated', (e, url) => cb(url)),
-  onDownloadStarted:  (cb) => ipcRenderer.on('download-started', (e, d) => cb(d)),
-  onDownloadProgress: (cb) => ipcRenderer.on('download-progress', (e, d) => cb(d)),
-  onDownloadComplete: (cb) => ipcRenderer.on('download-complete', (e, d) => cb(d))
-});
-
-console.log('[PRELOAD-SECURE] Injeção síncrona de sessão ativa. Sem auto-refresh. 🚀');
+    
+    // Reajusta em mudanças de tamanho
+    window.addEventListener('resize', () => {
+        adjustFixedElements();
+    });
+})();
