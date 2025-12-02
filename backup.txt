@@ -1,4 +1,4 @@
-/* eslint-disable no-undef */ 
+/* eslint-disable no-undef */
 // preload-secure.js
 
 // Camuflagem Anti-Detecção de Bots
@@ -43,25 +43,25 @@ function performAutoLogin() {
     if (!autoLoginCredentials || loginAttempted) return;
     const { usuariodaferramenta, senhadaferramenta } = autoLoginCredentials;
     console.log('[AUTO-LOGIN] 🚀 Iniciando login automático...');
-
-    const emailField = document.querySelector('input[id="amember-login"]') ||
-        document.querySelector('input[name="amember_login"]') ||
-        document.querySelector('input[type="email"]') ||
-        document.querySelector('input[placeholder*="Username" i]');
-
-    const passwordField = document.querySelector('input[id="amember-pass"]') ||
-        document.querySelector('input[name="amember_pass"]') ||
-        document.querySelector('input[type="password"]');
-
+    
+    const emailField = document.querySelector('input[id="amember-login"]') || 
+                      document.querySelector('input[name="amember_login"]') ||
+                      document.querySelector('input[type="email"]') ||
+                      document.querySelector('input[placeholder*="Username" i]');
+                      
+    const passwordField = document.querySelector('input[id="amember-pass"]') || 
+                         document.querySelector('input[name="amember_pass"]') ||
+                         document.querySelector('input[type="password"]');
+    
     if (emailField && passwordField) {
         const emailFilled = fillFieldFast(emailField, usuariodaferramenta);
         const passwordFilled = fillFieldFast(passwordField, senhadaferramenta);
-
+        
         if (emailFilled && passwordFilled) {
             loginAttempted = true;
             setTimeout(() => {
                 const submitButton = document.querySelector('input[type="submit"]') ||
-                    document.querySelector('button[type="submit"]');
+                                   document.querySelector('button[type="submit"]');
                 if (submitButton) submitButton.click();
             }, 300);
         }
@@ -121,7 +121,7 @@ console.log('%c[PRELOAD SCRIPT] Moderno e Funcionando!', 'color: #00FF00; font-s
             container = document.createElement('div');
             container.id = CONTAINER_ID;
             container.setAttribute('data-secure-browser', 'true');
-
+            
             container.style.cssText = `
                 position: fixed;
                 top: 0;
@@ -367,35 +367,41 @@ console.log('%c[PRELOAD SCRIPT] Moderno e Funcionando!', 'color: #00FF00; font-s
             styleEl.id = 'multiprime-layout-adjust';
             (document.head || document.documentElement).appendChild(styleEl);
         }
-
+        
         // Correção específica para sites problemáticos
         const hostname = window.location.hostname;
         const isVectorizer = hostname.includes('vectorizer');
         const isMotionArray = hostname.includes('motionarray');
-        const isProblematicSite = isVectorizer || isMotionArray ||
-            hostname.includes('placeit') ||
-            hostname.includes('canva');
-
+        const isProblematicSite = isVectorizer || isMotionArray || 
+                                  hostname.includes('placeit') ||
+                                  hostname.includes('canva');
+        
         console.log(`[TOOLBAR] Aplicando layout para: ${hostname} (isVectorizer: ${isVectorizer})`);
-
+        
         if (isVectorizer) {
-            // Vectorizer
+            // Vectorizer: Abordagem minimalista - APENAS o container principal
             styleEl.textContent = `
                 :root { --toolbar-offset: ${TITLE_BAR_HEIGHT}px; }
+                
+                /* HTML e BODY naturais sem modificação */
                 html, body { 
                     margin: 0 !important;
                     padding: 0 !important;
                 }
+                
+                /* Ajusta APENAS o container principal */
                 #App-App {
                     top: ${TITLE_BAR_HEIGHT}px !important;
                 }
+                
+                /* Scroll padding */
                 * {
                     scroll-padding-top: ${TITLE_BAR_HEIGHT}px !important;
                 }
             `;
             console.log('[TOOLBAR] CSS minimalista aplicado - sem sobreposições!');
         } else if (isMotionArray) {
-            // MotionArray
+            // MotionArray: usa padding-top no body
             styleEl.textContent = `
                 :root { --toolbar-offset: ${TITLE_BAR_HEIGHT}px; }
                 body { 
@@ -411,7 +417,7 @@ console.log('%c[PRELOAD SCRIPT] Moderno e Funcionando!', 'color: #00FF00; font-s
             `;
             console.log('[TOOLBAR] CSS do MotionArray aplicado!');
         } else if (isProblematicSite) {
-            // Outros problemáticos
+            // Para outros sites problemáticos
             styleEl.textContent = `
                 :root { --toolbar-offset: ${TITLE_BAR_HEIGHT}px; }
                 body { 
@@ -429,7 +435,7 @@ console.log('%c[PRELOAD SCRIPT] Moderno e Funcionando!', 'color: #00FF00; font-s
                 }
             `;
         } else {
-            // Padrão
+            // Para sites normais, usar o método padrão
             styleEl.textContent = `
                 :root { --toolbar-offset: ${TITLE_BAR_HEIGHT}px; } 
                 html { 
@@ -444,32 +450,6 @@ console.log('%c[PRELOAD SCRIPT] Moderno e Funcionando!', 'color: #00FF00; font-s
                 }
             `;
         }
-
-        // ===== EXCEÇÃO SORA & RUNWAY: esconder tooltips =====
-        if (hostname.includes('sora') || hostname.includes('runway')) {
-            let soraStyle = document.getElementById('sora-tooltips-hide');
-            if (!soraStyle) {
-                soraStyle = document.createElement('style');
-                soraStyle.id = 'sora-tooltips-hide';
-                (document.head || document.documentElement).appendChild(soraStyle);
-            }
-
-            soraStyle.textContent = `
-                /* Esconde tooltips do Radix e similares no Sora e Runway */
-                [data-radix-tooltip-content],
-                [data-radix-tooltip-content-wrapper],
-                [role="tooltip"],
-                [data-tooltip],
-                [data-balloon],
-                .tooltip {
-                    display: none !important;
-                    opacity: 0 !important;
-                    visibility: hidden !important;
-                    pointer-events: none !important;
-                }
-            `;
-            console.log('🧩 [SORA/RUNWAY PATCH] Tooltips desativados com sucesso');
-        }
     }
 
     function setupDomMonitoring() {
@@ -479,23 +459,22 @@ console.log('%c[PRELOAD SCRIPT] Moderno e Funcionando!', 'color: #00FF00; font-s
             adjustFixedElements(); // Ajusta elementos fixed/sticky continuamente
         });
         observer.observe(document.documentElement, { childList: true, subtree: true });
-
+        
         // Ajusta imediatamente e depois periodicamente
         adjustFixedElements();
-
+        
+        // Intervalo mais curto para sites problemáticos
         const hostname = window.location.hostname;
         const interval = (hostname.includes('vectorizer') || hostname.includes('motionarray')) ? 1000 : 2000;
         setInterval(adjustFixedElements, interval);
     }
-
+    
     function adjustFixedElements() {
         const hostname = window.location.hostname;
         const isVectorizer = hostname.includes('vectorizer');
-        const isSora = hostname.includes('sora');
-        const isRunway = hostname.includes('runway');
-
+        
         if (isVectorizer) {
-            // Para Vectorizer, ajustar apenas o container principal
+            // Para Vectorizer, ajustar apenas o container principal da app
             const appContainer = document.getElementById('App-App');
             if (appContainer) {
                 const style = window.getComputedStyle(appContainer);
@@ -510,31 +489,29 @@ console.log('%c[PRELOAD SCRIPT] Moderno e Funcionando!', 'color: #00FF00; font-s
             }
             return; // Para Vectorizer, só isso
         }
-
+        
+        // Para outros sites, usar método normal
         const selectors = [
             'header', 'nav', '[role="banner"]', '[role="navigation"]',
-            '[class*="header"]', '[class*="Header"]', '[class*="navbar"]',
+            '[class*="header"]', '[class*="Header"]', '[class*="navbar"]', 
             '[class*="nav-bar"]', '[class*="topbar"]', '[class*="top-bar"]',
             '[class*="toolbar"]', '[class*="Toolbar"]',
             '[style*="position: fixed"]', '[style*="position:fixed"]',
             '[style*="position: sticky"]', '[style*="position:sticky"]'
         ];
-
+        
         document.querySelectorAll(selectors.join(',')).forEach(el => {
             if (el.id === CONTAINER_ID || el.closest(`#${CONTAINER_ID}`)) return;
             if (el.hasAttribute('data-adjusted-by-toolbar')) return;
-
-            // ===== EXCEÇÃO SORA/RUNWAY: NÃO mexer nos poppers do Radix =====
-            if ((isSora || isRunway) && el.hasAttribute('data-radix-popper-content-wrapper')) return;
-
+            
             try {
                 const style = window.getComputedStyle(el);
                 const position = style.position;
-
+                
                 if (position === 'fixed' || position === 'sticky') {
                     const currentTop = parseFloat(style.top) || 0;
                     const threshold = 5;
-
+                    
                     if (currentTop >= -5 && currentTop < threshold) {
                         const newTop = TITLE_BAR_HEIGHT + Math.max(0, currentTop);
                         el.style.setProperty('top', `${newTop}px`, 'important');
@@ -542,10 +519,10 @@ console.log('%c[PRELOAD SCRIPT] Moderno e Funcionando!', 'color: #00FF00; font-s
                         console.log(`[TOOLBAR] Ajustado elemento:`, el.className || el.tagName, `de ${currentTop}px para ${newTop}px`);
                     }
                 }
-            } catch (e) { }
+            } catch (e) {}
         });
     }
-
+    
     function setupEvents() {
         if (!shadowRoot) return;
         shadowRoot.querySelector('.bar').addEventListener('click', (e) => {
@@ -563,50 +540,42 @@ console.log('%c[PRELOAD SCRIPT] Moderno e Funcionando!', 'color: #00FF00; font-s
                 case 'close': ipcRenderer.send('close-secure-window'); break;
             }
         });
-
         shadowRoot.addEventListener('click', (e) => {
             if (!e.target.closest('.downloads-menu') && !e.target.closest('[data-action="downloads"]')) {
                 shadowRoot.querySelector('.downloads-menu').classList.remove('open');
             }
         });
-
-        const updateStatus = () => {
-            if (shadowRoot) {
-                const s = shadowRoot.querySelector('.status');
-                if (s) s.style.background = navigator.onLine ? '#00d084' : '#e74c3c';
-            }
-        };
+        const updateStatus = () => { if(shadowRoot) { const s = shadowRoot.querySelector('.status'); if(s) s.style.background = navigator.onLine ? '#00d084' : '#e74c3c'; } };
         window.addEventListener('online', updateStatus);
         window.addEventListener('offline', updateStatus);
     }
-
+    
     function setupIpcListeners() {
         ipcRenderer.on('url-updated', (event, url) => {
-            if (shadowRoot) {
-                const urlInput = shadowRoot.querySelector('.url');
-                if (urlInput) urlInput.value = url;
-
+            if (shadowRoot) { 
+                const urlInput = shadowRoot.querySelector('.url'); 
+                if (urlInput) urlInput.value = url; 
+                
                 // Atualizar favicon e lock
                 try {
                     const u = new URL(url);
                     const lock = shadowRoot.querySelector('.lock');
                     const fav = shadowRoot.querySelector('.favicon');
-
+                    
                     if (lock) lock.textContent = u.protocol === 'https:' ? '🔒' : '⚠️';
                     if (fav) {
                         fav.src = `${u.origin}/favicon.ico`;
                         fav.onerror = () => fav.removeAttribute('src');
                     }
-                } catch (e) { }
+                } catch(e) {}
             }
-
+            
             // Reaplica ajustes de layout quando a URL muda
             setTimeout(() => {
                 applyLayoutAdjustment();
                 adjustFixedElements();
             }, 500);
         });
-
         ipcRenderer.on('download-started', (event, { id, filename }) => {
             downloads.set(id, { filename, progress: 0, state: 'active' });
             updateDownloadsUI();
@@ -631,8 +600,8 @@ console.log('%c[PRELOAD SCRIPT] Moderno e Funcionando!', 'color: #00FF00; font-s
             const item = document.createElement('div');
             item.className = 'dl-item';
             let status = `${dl.progress}%`;
-            if (dl.state === 'completed') status = 'Concluído';
-            else if (dl.state === 'cancelled') status = 'Cancelado';
+            if (dl.state === 'completed') status = 'Concluído'; 
+            else if (dl.state === 'cancelled') status = 'Cancelado'; 
             else if (dl.state === 'interrupted') status = 'Falha';
             item.innerHTML = `<div class="dl-info"><span class="dl-name" title="${dl.filename}">${dl.filename}</span><span>${status}</span></div><div class="dl-progress"><div class="dl-bar ${dl.state === 'completed' ? 'done' : ''}" style="width: ${dl.progress}%"></div></div>`;
             if (dl.state === 'completed' && dl.path) {
@@ -641,20 +610,20 @@ console.log('%c[PRELOAD SCRIPT] Moderno e Funcionando!', 'color: #00FF00; font-s
                 actions.innerHTML = `<a class="dl-action" data-path="${dl.path}" data-action="open">Abrir</a><a class="dl-action" data-path="${dl.path}" data-action="show">Mostrar na pasta</a>`;
                 actions.addEventListener('click', (e) => {
                     const target = e.target.closest('.dl-action');
-                    if (target) ipcRenderer.send(target.dataset.action === 'open' ? 'open-download' : 'show-download-in-folder', target.dataset.path);
+                    if(target) ipcRenderer.send(target.dataset.action === 'open' ? 'open-download' : 'show-download-in-folder', target.dataset.path);
                 });
                 item.appendChild(actions);
             }
             menu.appendChild(item);
         });
     }
-
+    
     if (document.readyState === 'interactive' || document.readyState === 'complete') {
         createTitleBar();
     } else {
         document.addEventListener('DOMContentLoaded', createTitleBar, { once: true });
     }
-
+    
     // Ajustes adicionais quando tudo carregar
     window.addEventListener('load', () => {
         setTimeout(() => {
@@ -662,11 +631,9 @@ console.log('%c[PRELOAD SCRIPT] Moderno e Funcionando!', 'color: #00FF00; font-s
             adjustFixedElements();
         }, 500);
     });
-
+    
     // Reajusta em mudanças de tamanho
     window.addEventListener('resize', () => {
         adjustFixedElements();
     });
 })();
-
-console.log('%c[SECURE WINDOW] Pronto!', 'color: cyan; font-weight: bold;');
