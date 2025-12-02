@@ -372,13 +372,30 @@ console.log('%c[PRELOAD SCRIPT] Moderno e Funcionando!', 'color: #00FF00; font-s
         const hostname = window.location.hostname;
         const isVectorizer = hostname.includes('vectorizer');
         const isMotionArray = hostname.includes('motionarray');
+        const isPlaceit = hostname.includes('placeit');
         const isProblematicSite = isVectorizer || isMotionArray ||
-            hostname.includes('placeit') ||
+            isPlaceit ||
             hostname.includes('canva');
 
         console.log(`[TOOLBAR] Aplicando layout para: ${hostname} (isVectorizer: ${isVectorizer})`);
 
-        if (isVectorizer) {
+        if (isPlaceit) {
+            // Placeit - Empurrar TODO o site para baixo (não só o header)
+            styleEl.textContent = `
+                :root { --toolbar-offset: ${TITLE_BAR_HEIGHT}px; }
+                html { 
+                    position: relative !important; 
+                    top: ${TITLE_BAR_HEIGHT}px !important; 
+                    height: calc(100vh - ${TITLE_BAR_HEIGHT}px) !important; 
+                    overflow-y: auto !important; 
+                } 
+                body { 
+                    min-height: 100% !important; 
+                    height: auto !important; 
+                }
+            `;
+            console.log('[TOOLBAR] Placeit - TODO o site empurrado para baixo!');
+        } else if (isVectorizer) {
             // Vectorizer
             styleEl.textContent = `
                 :root { --toolbar-offset: ${TITLE_BAR_HEIGHT}px; }
@@ -445,17 +462,18 @@ console.log('%c[PRELOAD SCRIPT] Moderno e Funcionando!', 'color: #00FF00; font-s
             `;
         }
 
-        // ===== EXCEÇÃO SORA & RUNWAY: esconder tooltips =====
+        // ===== EXCEÇÃO SORA E RUNWAY: esconder tooltips =====
         if (hostname.includes('sora') || hostname.includes('runway')) {
-            let soraStyle = document.getElementById('sora-tooltips-hide');
-            if (!soraStyle) {
-                soraStyle = document.createElement('style');
-                soraStyle.id = 'sora-tooltips-hide';
-                (document.head || document.documentElement).appendChild(soraStyle);
+            const siteLabel = hostname.includes('sora') ? 'SORA' : 'RUNWAY';
+            let tooltipsStyle = document.getElementById('tooltips-hide');
+            if (!tooltipsStyle) {
+                tooltipsStyle = document.createElement('style');
+                tooltipsStyle.id = 'tooltips-hide';
+                (document.head || document.documentElement).appendChild(tooltipsStyle);
             }
 
-            soraStyle.textContent = `
-                /* Esconde tooltips do Radix e similares no Sora e Runway */
+            tooltipsStyle.textContent = `
+                /* Esconde tooltips do Radix e similares no Sora/Runway */
                 [data-radix-tooltip-content],
                 [data-radix-tooltip-content-wrapper],
                 [role="tooltip"],
@@ -468,7 +486,7 @@ console.log('%c[PRELOAD SCRIPT] Moderno e Funcionando!', 'color: #00FF00; font-s
                     pointer-events: none !important;
                 }
             `;
-            console.log('🧩 [SORA/RUNWAY PATCH] Tooltips desativados com sucesso');
+            console.log(`🧩 [${siteLabel} PATCH] Tooltips desativados com sucesso`);
         }
     }
 
@@ -490,6 +508,14 @@ console.log('%c[PRELOAD SCRIPT] Moderno e Funcionando!', 'color: #00FF00; font-s
 
     function adjustFixedElements() {
         const hostname = window.location.hostname;
+        const isPlaceit = hostname.includes('placeit');
+        
+        // ===== EXCEÇÃO PLACEIT: NÃO AJUSTAR NADA =====
+        if (isPlaceit) {
+            console.log('[TOOLBAR] Placeit detectado - NÃO ajustando elementos fixed');
+            return; // Sai completamente, não mexe em nada
+        }
+        
         const isVectorizer = hostname.includes('vectorizer');
         const isSora = hostname.includes('sora');
         const isRunway = hostname.includes('runway');
@@ -524,7 +550,7 @@ console.log('%c[PRELOAD SCRIPT] Moderno e Funcionando!', 'color: #00FF00; font-s
             if (el.id === CONTAINER_ID || el.closest(`#${CONTAINER_ID}`)) return;
             if (el.hasAttribute('data-adjusted-by-toolbar')) return;
 
-            // ===== EXCEÇÃO SORA/RUNWAY: NÃO mexer nos poppers do Radix =====
+            // ===== EXCEÇÃO SORA E RUNWAY: NÃO mexer nos poppers do Radix =====
             if ((isSora || isRunway) && el.hasAttribute('data-radix-popper-content-wrapper')) return;
 
             try {
