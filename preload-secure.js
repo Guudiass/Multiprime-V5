@@ -3,7 +3,7 @@
 
 const { ipcRenderer, webFrame } = require('electron');
 
-// ===== POLYFILL CRÍTICO PARA SET METHODS (Leonardo Fix) =====
+// ===== POLYFILL CRÍTICO PARA SET METHODS (Leonardoa Fix) =====
 // DEVE SER EXECUTADO NO MAIN WORLD ANTES DO SITE CARREGAR
 (() => {
   try {
