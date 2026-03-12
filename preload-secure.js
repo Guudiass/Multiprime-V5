@@ -138,4 +138,4 @@ ipcRenderer.on('inject-session-data', (event, sessionData) => {
 
 ipcRenderer.send('request-session-data');
 
-console.log('[PRELOAD-SECURE] Carregado (sem manipulação de DOM/CSS).');
+console.log('[PRELOAD-SECURE] Carregado.');

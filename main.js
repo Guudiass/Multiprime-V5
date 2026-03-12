@@ -12440,6 +12440,50 @@ function updateViewBounds(mainWindow) {
 }
 
 /**
+ * Injetar CSS fixes específicos por site.
+ * Necessário porque o BrowserView pode causar diferenças de layout em sites
+ * que usam 100vh, position: fixed, ou grids complexos.
+ */
+function injectSiteFixes(webContents) {
+    if (webContents.isDestroyed()) return;
+
+    try {
+        const currentUrl = webContents.getURL();
+        const hostname = new URL(currentUrl).hostname;
+
+        // ChatGPT: dialog de visualização de imagem fica deslocado no grid
+        if (hostname.includes('chatgpt.com') || hostname.includes('chat.openai.com')) {
+            webContents.insertCSS(`
+                [role="dialog"][data-state="open"] {
+                    position: fixed !important;
+                    top: 0 !important;
+                    left: 0 !important;
+                    right: 0 !important;
+                    bottom: 0 !important;
+                    width: 100vw !important;
+                    height: 100vh !important;
+                    max-width: 100vw !important;
+                    max-height: 100vh !important;
+                    transform: none !important;
+                    margin: 0 !important;
+                    z-index: 9999 !important;
+                    grid-column: 1 / -1 !important;
+                    grid-row: 1 / -1 !important;
+                }
+            `).then(() => {
+                console.log(`[CSS FIX] Dialog fix aplicado para ${hostname}`);
+            }).catch(() => {});
+        }
+
+        // Adicionar mais sites aqui conforme necessário:
+        // if (hostname.includes('outro-site.com')) { ... }
+
+    } catch (e) {
+        // URL inválida ou webContents destruído — ignorar
+    }
+}
+
+/**
  * Cria a janela principal com toolbar embutida + BrowserView para o conteúdo web.
  * A toolbar é um HTML local carregado na própria janela.
  * O conteúdo web fica num BrowserView separado, SEM NENHUMA interferência CSS.
@@ -12532,6 +12576,13 @@ function createSecureWindow(perfil, isolatedSession, storageData) {
     view.webContents.on('did-finish-load', () => {
         setTimeout(forceViewportRecalc, 300);
         setTimeout(forceViewportRecalc, 1000);
+        // Injetar CSS fixes específicos por site
+        injectSiteFixes(view.webContents);
+    });
+
+    // Também injetar após navegação (SPA routing)
+    view.webContents.on('did-navigate', () => {
+        setTimeout(() => injectSiteFixes(view.webContents), 500);
     });
     view.webContents.on('did-start-navigation', (e, url, isInPlace, isMainFrame) => {
         if (isMainFrame) {
