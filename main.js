@@ -12454,21 +12454,35 @@ function injectSiteFixes(webContents) {
         // ChatGPT: dialog de visualização de imagem fica deslocado no grid
         if (hostname.includes('chatgpt.com') || hostname.includes('chat.openai.com')) {
             webContents.insertCSS(`
+                /* Fix: dialog do ChatGPT no BrowserView */
                 [role="dialog"][data-state="open"] {
                     position: fixed !important;
+                    inset: 0 !important;
                     top: 0 !important;
                     left: 0 !important;
                     right: 0 !important;
                     bottom: 0 !important;
                     width: 100vw !important;
                     height: 100vh !important;
-                    max-width: 100vw !important;
-                    max-height: 100vh !important;
+                    max-width: none !important;
+                    max-height: none !important;
                     transform: none !important;
+                    translate: none !important;
                     margin: 0 !important;
+                    padding: 0 !important;
                     z-index: 9999 !important;
                     grid-column: 1 / -1 !important;
                     grid-row: 1 / -1 !important;
+                    inset-inline-start: 0 !important;
+                }
+                /* Sobrescrever overlay/backdrop do dialog */
+                [data-state="open"][role="dialog"] ~ div[data-state="open"],
+                div:has(> [role="dialog"][data-state="open"]) {
+                    position: fixed !important;
+                    inset: 0 !important;
+                    width: 100vw !important;
+                    height: 100vh !important;
+                    z-index: 9998 !important;
                 }
             `).then(() => {
                 console.log(`[CSS FIX] Dialog fix aplicado para ${hostname}`);
