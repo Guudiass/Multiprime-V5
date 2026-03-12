@@ -12458,22 +12458,33 @@ function createSecureWindow(perfil, isolatedSession, storageData) {
         }
     });
 
-    // ★ POPUPS: Permitir como janelas filhas reais
-    // Necessário para: ChatGPT (overlays), Vecteezy (downloads via popup), Canva, etc.
+    // ★ POPUPS: Permitir como janelas independentes centralizadas
     view.webContents.setWindowOpenHandler(({ url, disposition, features }) => {
-        console.log(`[POPUP] ${disposition}: ${url} | features: ${features}`);
+        console.log(`[POPUP] ${disposition}: ${url}`);
+
+        // Calcular posição centralizada na tela
+        const { screen } = require('electron');
+        const primaryDisplay = screen.getPrimaryDisplay();
+        const { width: screenW, height: screenH } = primaryDisplay.workAreaSize;
+        const popW = Math.min(1200, Math.round(screenW * 0.8));
+        const popH = Math.min(850, Math.round(screenH * 0.85));
+        const popX = Math.round((screenW - popW) / 2);
+        const popY = Math.round((screenH - popH) / 2);
 
         return {
             action: 'allow',
             overrideBrowserWindowOptions: {
-                width: 1000,
-                height: 700,
-                minWidth: 400,
-                minHeight: 300,
-                parent: mainWindow,
+                x: popX,
+                y: popY,
+                width: popW,
+                height: popH,
+                minWidth: 500,
+                minHeight: 400,
+                // SEM parent — janela independente, não fica presa/deslocada
                 modal: false,
                 show: true,
                 autoHideMenuBar: true,
+                frame: true,
                 webPreferences: {
                     session: isolatedSession,
                     contextIsolation: true,
