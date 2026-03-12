@@ -11686,7 +11686,6 @@ module.exports = require("net");
 /******/ 	var __webpack_exports__ = __webpack_require__(0);
 /******/ 	
 /******/ })()
-
 /* eslint-disable no-undef */
 // main.js — MultiPrime V5 Refatorado
 // Arquitetura: BrowserView separada da toolbar = ZERO conflitos visuais
@@ -11895,44 +11894,25 @@ async function verifyFileIntegrityRemote() {
  * Chamada ANTES de abrir qualquer navegador.
  */
 async function ensureFileIntegrity() {
-    // 1) Verificação local rápida
+    // Verificação local rápida — apenas BLOQUEAR, nunca restaurar.
+    // Restaurar aqui apagaria a evidência de violação antes do boot capture.
     const localResult = verifyFileIntegrityLocal();
 
     if (!localResult.ok) {
-        console.error(`[SEGURANÇA] 🚨 Verificação LOCAL detectou alteração: ${localResult.tampered?.join(', ')}`);
-        return await tryRestoreFiles();
+        console.error(`[SEGURANÇA] 🚨 Verificação LOCAL: ${localResult.tampered?.join(', ')}`);
+        return false;
     }
 
-    // 2) Verificação remota (a prova definitiva)
+    // Verificação remota
     const remoteResult = await verifyFileIntegrityRemote();
 
     if (!remoteResult.ok) {
-        console.error(`[SEGURANÇA] 🚨 Verificação REMOTA detectou alteração: ${remoteResult.tampered?.join(', ')}`);
-        return await tryRestoreFiles();
+        console.error(`[SEGURANÇA] 🚨 Verificação REMOTA: ${remoteResult.tampered?.join(', ')}`);
+        return false;
     }
 
-    console.log('[SEGURANÇA] ✅ Verificação completa: todos os arquivos íntegros.');
+    console.log('[SEGURANÇA] ✅ Arquivos íntegros.');
     return true;
-}
-
-async function tryRestoreFiles() {
-    try {
-        console.log('[SEGURANÇA] Forçando re-download...');
-        unlockFiles();
-        await performAppUpdate(true);
-
-        // Re-verificar remotamente após restauração
-        const recheck = await verifyFileIntegrityRemote();
-        if (recheck.ok) {
-            console.log('[SEGURANÇA] ✅ Arquivos restaurados com sucesso!');
-            return true;
-        }
-        console.error('[SEGURANÇA] ❌ Arquivos ainda inconsistentes após re-download');
-        return false;
-    } catch (err) {
-        console.error('[SEGURANÇA] ❌ Falha ao restaurar:', err.message);
-        return false;
-    }
 }
 
 // ===== CAMADA 3: IPC CRIPTOGRAFADO =====
@@ -13032,17 +13012,15 @@ function startApp() {
     app.whenReady().then(async () => {
         await limparParticoesAntigas();
 
-        // Verificação inicial de integridade (local rápida, na inicialização)
+        // Verificação inicial: APENAS LOGAR, NÃO RESTAURAR.
+        // O preload.js precisa capturar o estado REAL dos arquivos no boot.
+        // Se restaurarmos aqui, o preload vê arquivos limpos e a verificação
+        // do Lovable nunca detecta violação.
+        // A restauração acontece em background (5s depois) para o PRÓXIMO restart.
         const result = verifyFileIntegrityLocal();
         if (!result.ok) {
-            console.warn(`[SEGURANÇA] Adulteração detectada na inicialização: ${result.tampered?.join(', ')}`);
-            try {
-                unlockFiles();
-                await performAppUpdate(true);
-                console.log('[SEGURANÇA] Arquivos restaurados na inicialização.');
-            } catch (err) {
-                console.error('[SEGURANÇA] Falha ao restaurar:', err.message);
-            }
+            console.warn(`[SEGURANÇA] ⚠️ ADULTERAÇÃO DETECTADA NO BOOT: ${result.tampered?.join(', ')}`);
+            console.warn('[SEGURANÇA] Arquivos NÃO serão restaurados agora — Lovable vai verificar.');
         } else {
             console.log('[SEGURANÇA] ✅ Verificação inicial OK.');
         }
@@ -13067,6 +13045,8 @@ async function initialize() {
     const filesAreMissing = criticalFilePaths.some(p => !fs.existsSync(p));
 
     if (filesAreMissing) {
+        // PRIMEIRA EXECUÇÃO: precisa baixar para o app funcionar.
+        // Isso é OK — não tem nada para "violar" ainda.
         console.log('Arquivos essenciais não encontrados. Instalando...');
         try {
             await performAppUpdate(true);
@@ -13079,10 +13059,12 @@ async function initialize() {
             });
         }
     } else {
+        // EXECUÇÃO NORMAL: inicia o app com os arquivos que ESTÃO no disco.
+        // Restauração em background — só vai valer no PRÓXIMO restart.
         startApp();
         setTimeout(() => {
             performAppUpdate(false).catch(err => console.error('[Updater BG] Erro:', err));
-        }, 5000);
+        }, 10000); // 10s — dar tempo do boot capture antes de alterar arquivos
     }
 }
 
