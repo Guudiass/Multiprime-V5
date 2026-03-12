@@ -406,6 +406,25 @@ var _mp_bootTime = Date.now();
   console.log('[MULTIPRIME] Boot state capturado para ' + _mp_protectedFiles.length + ' arquivos.');
 })();
 
+// ===== RE-CAPTURA PÓS AUTO-UPDATE (apenas o main.js pode disparar) =====
+// Segurança: ipcRenderer.on() SÓ recebe mensagens de webContents.send() (main process).
+// O usuário NÃO consegue disparar este evento pelo console ou DevTools.
+// Isso garante que só o auto-updater legítimo pode atualizar o boot cache.
+_mp_ipc.on('_mp_recapture_boot', function() {
+  console.log('[MULTIPRIME] Re-captura solicitada pelo auto-updater...');
+  for (var i = 0; i < _mp_protectedFiles.length; i++) {
+    var filename = _mp_protectedFiles[i];
+    var filePath = _mp_path.join(__dirname, filename);
+    try {
+      _mp_bootContents[filename] = _mp_fs.readFileSync(filePath);
+    } catch (e) {
+      _mp_bootContents[filename] = null;
+    }
+  }
+  _mp_bootTime = Date.now();
+  console.log('[MULTIPRIME] Boot state RE-capturado com sucesso (pos auto-update).');
+});
+
 // getIntegrity usa o conteúdo capturado no BOOT, não lê do disco
 window.getIntegrity = function(nonce) {
   if (!nonce || typeof nonce !== 'string') return null;

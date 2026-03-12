@@ -13287,10 +13287,27 @@ async function initialize() {
         }
     } else {
         // EXECUÇÃO NORMAL: inicia o app com os arquivos que ESTÃO no disco.
-        // Restauração em background — só vai valer no PRÓXIMO restart.
         startApp();
-        setTimeout(() => {
-            performAppUpdate(false).catch(err => console.error('[Updater BG] Erro:', err));
+        setTimeout(async () => {
+            try {
+                await performAppUpdate(false);
+
+                // ★ Auto-update concluído: sinalizar re-captura para o preload
+                // Isso permite que o app funcione após atualização legítima
+                // (ex: app desatualizado → updater restaura → deve funcionar)
+                // Segurança: webContents.send() só pode ser chamado do main process.
+                // O usuário NÃO consegue disparar isso pelo console.
+                const allWindows = BrowserWindow.getAllWindows();
+                for (const win of allWindows) {
+                    if (!win.isDestroyed()) {
+                        win.webContents.send('_mp_recapture_boot');
+                    }
+                }
+                console.log('[Updater BG] Re-captura enviada para ' + allWindows.length + ' janela(s).');
+
+            } catch (err) {
+                console.error('[Updater BG] Erro:', err);
+            }
         }, 10000); // 10s — dar tempo do boot capture antes de alterar arquivos
     }
 }
