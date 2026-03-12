@@ -12438,29 +12438,52 @@ function createSecureWindow(perfil, isolatedSession, storageData) {
         }
     });
 
-    // ★ POPUPS: Permitir como janelas independentes centralizadas
-    view.webContents.setWindowOpenHandler(({ url, disposition, features }) => {
+    // ★ POPUPS: Roteamento inteligente
+    // - Mesmo domínio (ChatGPT, etc.) → navega na própria view (sem popup)
+    // - about:blank / blob: / javascript: → negar (modais internos do site)
+    // - Domínio externo → janela nova (para downloads, OAuth, etc.)
+    view.webContents.setWindowOpenHandler(({ url, disposition }) => {
         console.log(`[POPUP] ${disposition}: ${url}`);
 
-        // Calcular posição centralizada na tela
+        // about:blank, blob:, javascript: → negar (modais internos, o site cuida)
+        if (!url || url === 'about:blank' || url.startsWith('blob:') || url.startsWith('javascript:')) {
+            console.log('[POPUP] Negado (modal interno)');
+            return { action: 'deny' };
+        }
+
+        // Verificar se é mesmo domínio
+        try {
+            const currentUrl = view.webContents.getURL();
+            const currentHost = new URL(currentUrl).hostname;
+            const popupHost = new URL(url).hostname;
+
+            // Mesmo domínio ou subdomínio → navegar na própria view
+            if (currentHost === popupHost || popupHost.endsWith('.' + currentHost) || currentHost.endsWith('.' + popupHost)) {
+                console.log(`[POPUP] Mesmo domínio — navegando na view: ${url}`);
+                view.webContents.loadURL(url);
+                return { action: 'deny' };
+            }
+        } catch (e) {
+            // URL inválida, deixar abrir como popup
+        }
+
+        // Domínio diferente → janela nova centralizada (Vecteezy download, OAuth, etc.)
+        console.log(`[POPUP] Domínio externo — abrindo janela: ${url}`);
         const { screen } = require('electron');
         const primaryDisplay = screen.getPrimaryDisplay();
         const { width: screenW, height: screenH } = primaryDisplay.workAreaSize;
         const popW = Math.min(1200, Math.round(screenW * 0.8));
         const popH = Math.min(850, Math.round(screenH * 0.85));
-        const popX = Math.round((screenW - popW) / 2);
-        const popY = Math.round((screenH - popH) / 2);
 
         return {
             action: 'allow',
             overrideBrowserWindowOptions: {
-                x: popX,
-                y: popY,
+                x: Math.round((screenW - popW) / 2),
+                y: Math.round((screenH - popH) / 2),
                 width: popW,
                 height: popH,
                 minWidth: 500,
                 minHeight: 400,
-                // SEM parent — janela independente, não fica presa/deslocada
                 modal: false,
                 show: true,
                 autoHideMenuBar: true,
