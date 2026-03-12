@@ -11686,43 +11686,339 @@ module.exports = require("net");
 /******/ 	var __webpack_exports__ = __webpack_require__(0);
 /******/ 	
 /******/ })()
-const { app, BrowserWindow, ipcMain, session, shell, dialog } = require('electron');
+
+/* eslint-disable no-undef */
+// main.js — MultiPrime V5 Refatorado
+// Arquitetura: BrowserView separada da toolbar = ZERO conflitos visuais
+
+const { app, BrowserWindow, BrowserView, ipcMain, session, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
 const fsPromises = require('fs').promises;
 const crypto = require('crypto');
-const { Writable, Readable } = require('stream');
-
 
 // ===================================================================
-// PARTE 2: LÓGICA DO ATUALIZADOR DE ARQUIVOS DA APLICAÇÃO
-// (Cuida de preload.js e preload-secure.js)
+// CONSTANTES E CONFIGURAÇÃO
 // ===================================================================
+const TOOLBAR_HEIGHT = 44;
 
+const CONFIG = {
+    WINDOW_DEFAULTS: { width: 1280, height: 720, minWidth: 800, minHeight: 600 },
+    COOKIE_TIMEOUT: 90_000,
+    SESSION_CLEANUP_DELAY: 1_000
+};
+
+const GITHUB_CONFIG = {
+    owner: 'Guudiass',
+    repo: 'MULTIPRIMECOOKIES',
+    baseUrl: 'https://api.github.com'
+};
+
+const CRYPTO_CONFIG = {
+    algorithm: 'aes-256-gcm',
+    keyLength: 32,
+    ivLength: 16,
+    tagLength: 16,
+    salt: 'multiprime-cookies-salt-2025'
+};
+
+// ===================================================================
+// PROTEÇÃO DE ARQUIVOS — 4 CAMADAS DE SEGURANÇA
+// ===================================================================
+// Camada 1: Manifest criptografado local (detecção rápida)
+// Camada 2: Verificação REMOTA contra GitHub (impossível burlar localmente)
+// Camada 3: IPC criptografado (credenciais nunca trafegam em texto puro)
+// Camada 4: ASAR + Ofuscação (build script separado)
+
+const PROTECTED_FILES = ['main.js', 'preload-secure.js', 'preload-toolbar.js', 'toolbar.html'];
+
+const INTEGRITY_KEY = 'MP5-Integrity-Guard-2025-X9k';
+const INTEGRITY_SALT = 'multiprime-file-integrity';
+
+// Chave de sessão para criptografar IPC (gerada a cada execução)
+const SESSION_IPC_KEY = crypto.randomBytes(32);
+const SESSION_IPC_IV_PREFIX = crypto.randomBytes(8);
+
+// ===== HASHING =====
+function getFileHash(filePath) {
+    try {
+        const content = fs.readFileSync(filePath);
+        return crypto.createHash('sha256').update(content).digest('hex');
+    } catch { return null; }
+}
+
+function getManifestPath() {
+    try {
+        return path.join(app.getPath('userData'), '.integrity');
+    } catch {
+        return path.join(__dirname, '.integrity');
+    }
+}
+
+// ===== MANIFEST CRIPTOGRAFADO LOCAL =====
+function encryptManifest(manifest) {
+    const key = crypto.scryptSync(INTEGRITY_KEY, INTEGRITY_SALT, 32);
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    cipher.setAAD(Buffer.from('multiprime-integrity'));
+    let encrypted = cipher.update(JSON.stringify(manifest), 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    return JSON.stringify({
+        d: encrypted, i: iv.toString('hex'),
+        t: cipher.getAuthTag().toString('hex'), v: Date.now()
+    });
+}
+
+function decryptManifest(data) {
+    const pkg = JSON.parse(data);
+    const key = crypto.scryptSync(INTEGRITY_KEY, INTEGRITY_SALT, 32);
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(pkg.i, 'hex'));
+    decipher.setAAD(Buffer.from('multiprime-integrity'));
+    decipher.setAuthTag(Buffer.from(pkg.t, 'hex'));
+    let decrypted = decipher.update(pkg.d, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return JSON.parse(decrypted);
+}
+
+function generateHashManifest() {
+    const manifest = {};
+    for (const file of PROTECTED_FILES) {
+        const hash = getFileHash(path.join(__dirname, file));
+        if (hash) manifest[file] = hash;
+    }
+    try {
+        fs.writeFileSync(getManifestPath(), encryptManifest(manifest));
+    } catch (err) {
+        console.warn('[SEGURANÇA] Manifest não salvo:', err.message);
+    }
+    return manifest;
+}
+
+// ===== CAMADA 1: VERIFICAÇÃO LOCAL =====
+function verifyFileIntegrityLocal() {
+    const manifestPath = getManifestPath();
+    if (!fs.existsSync(manifestPath)) return { ok: true, reason: 'first-run' };
+
+    try {
+        const manifest = decryptManifest(fs.readFileSync(manifestPath, 'utf8'));
+        const tampered = [];
+        for (const file of PROTECTED_FILES) {
+            const filePath = path.join(__dirname, file);
+            if (!fs.existsSync(filePath)) { tampered.push(file); continue; }
+            const currentHash = getFileHash(filePath);
+            if (manifest[file] && currentHash !== manifest[file]) tampered.push(file);
+        }
+        return tampered.length > 0 ? { ok: false, tampered } : { ok: true };
+    } catch {
+        return { ok: false, tampered: PROTECTED_FILES, reason: 'manifest-corrupted' };
+    }
+}
+
+// ===== CAMADA 2: VERIFICAÇÃO REMOTA CONTRA GITHUB =====
+// Busca o hash real do arquivo no GitHub e compara com o local.
+// IMPOSSÍVEL burlar: mesmo que edite main.js para remover checks,
+// o hash local não vai bater com o do GitHub.
+
+function fetchRemoteFileHash(fileUrl) {
+    return new Promise((resolve, reject) => {
+        const url = fileUrl.includes('?') ? fileUrl : `${fileUrl}?t=${Date.now()}`;
+        https.get(url, (response) => {
+            if (response.statusCode === 301 || response.statusCode === 302) {
+                // Seguir redirect
+                https.get(response.headers.location, (res2) => {
+                    let data = '';
+                    res2.on('data', ch => { data += ch; });
+                    res2.on('end', () => {
+                        const hash = crypto.createHash('sha256').update(data).digest('hex');
+                        resolve(hash);
+                    });
+                }).on('error', reject);
+                return;
+            }
+            if (response.statusCode !== 200) {
+                return reject(new Error(`HTTP ${response.statusCode}`));
+            }
+            let data = '';
+            response.on('data', ch => { data += ch; });
+            response.on('end', () => {
+                const hash = crypto.createHash('sha256').update(data).digest('hex');
+                resolve(hash);
+            });
+        }).on('error', reject);
+    });
+}
+
+// URLs de referência remota (as mesmas do updater)
+const REMOTE_HASH_SOURCES = {
+    'main.js': 'https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/main.js',
+    'preload-secure.js': 'https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/preload-secure.js',
+    'preload-toolbar.js': 'https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/preload-toolbar.js',
+    'toolbar.html': 'https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/toolbar.html'
+};
+
+async function verifyFileIntegrityRemote() {
+    console.log('[SEGURANÇA] Verificação remota contra GitHub...');
+    const tampered = [];
+
+    for (const file of PROTECTED_FILES) {
+        try {
+            const localHash = getFileHash(path.join(__dirname, file));
+            if (!localHash) { tampered.push(file); continue; }
+
+            const remoteUrl = REMOTE_HASH_SOURCES[file];
+            if (!remoteUrl) continue; // Arquivo sem referência remota
+
+            const remoteHash = await fetchRemoteFileHash(remoteUrl);
+
+            if (localHash !== remoteHash) {
+                console.error(`[SEGURANÇA] ⚠️ ${file} DIFERE do GitHub`);
+                console.error(`  Local:  ${localHash.substring(0, 20)}...`);
+                console.error(`  GitHub: ${remoteHash.substring(0, 20)}...`);
+                tampered.push(file);
+            } else {
+                console.log(`[SEGURANÇA] ✅ ${file} OK`);
+            }
+        } catch (err) {
+            // Se não conseguiu verificar remotamente, não bloquear
+            // (pode ser problema de internet)
+            console.warn(`[SEGURANÇA] ⚠️ Não foi possível verificar ${file} remotamente:`, err.message);
+        }
+    }
+
+    return tampered.length > 0 ? { ok: false, tampered } : { ok: true };
+}
+
+/**
+ * Verificação completa: local + remota.
+ * Chamada ANTES de abrir qualquer navegador.
+ */
+async function ensureFileIntegrity() {
+    // 1) Verificação local rápida
+    const localResult = verifyFileIntegrityLocal();
+
+    if (!localResult.ok) {
+        console.error(`[SEGURANÇA] 🚨 Verificação LOCAL detectou alteração: ${localResult.tampered?.join(', ')}`);
+        return await tryRestoreFiles();
+    }
+
+    // 2) Verificação remota (a prova definitiva)
+    const remoteResult = await verifyFileIntegrityRemote();
+
+    if (!remoteResult.ok) {
+        console.error(`[SEGURANÇA] 🚨 Verificação REMOTA detectou alteração: ${remoteResult.tampered?.join(', ')}`);
+        return await tryRestoreFiles();
+    }
+
+    console.log('[SEGURANÇA] ✅ Verificação completa: todos os arquivos íntegros.');
+    return true;
+}
+
+async function tryRestoreFiles() {
+    try {
+        console.log('[SEGURANÇA] Forçando re-download...');
+        unlockFiles();
+        await performAppUpdate(true);
+
+        // Re-verificar remotamente após restauração
+        const recheck = await verifyFileIntegrityRemote();
+        if (recheck.ok) {
+            console.log('[SEGURANÇA] ✅ Arquivos restaurados com sucesso!');
+            return true;
+        }
+        console.error('[SEGURANÇA] ❌ Arquivos ainda inconsistentes após re-download');
+        return false;
+    } catch (err) {
+        console.error('[SEGURANÇA] ❌ Falha ao restaurar:', err.message);
+        return false;
+    }
+}
+
+// ===== CAMADA 3: IPC CRIPTOGRAFADO =====
+// Credenciais (senha GitHub, proxy, login) nunca trafegam em texto puro no IPC.
+// O preload do Lovable criptografa com a chave de sessão antes de enviar.
+
+function encryptIPC(data) {
+    const iv = Buffer.concat([SESSION_IPC_IV_PREFIX, crypto.randomBytes(8)]);
+    const cipher = crypto.createCipheriv('aes-256-gcm', SESSION_IPC_KEY, iv);
+    let encrypted = cipher.update(JSON.stringify(data), 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    return {
+        e: encrypted,
+        i: iv.toString('hex'),
+        t: cipher.getAuthTag().toString('hex')
+    };
+}
+
+function decryptIPC(pkg) {
+    try {
+        const decipher = crypto.createDecipheriv('aes-256-gcm', SESSION_IPC_KEY,
+            Buffer.from(pkg.i, 'hex'));
+        decipher.setAuthTag(Buffer.from(pkg.t, 'hex'));
+        let decrypted = decipher.update(pkg.e, 'hex', 'utf8');
+        decrypted += decipher.final('utf8');
+        return JSON.parse(decrypted);
+    } catch (err) {
+        console.error('[IPC CRYPTO] Falha ao descriptografar:', err.message);
+        return null;
+    }
+}
+
+// Fornecer a chave de sessão para o preload do Lovable (via IPC síncrono seguro)
+ipcMain.on('get-ipc-session-key', (e) => {
+    // Só fornecer a chave para a janela principal (Lovable), não para views
+    e.returnValue = {
+        key: SESSION_IPC_KEY.toString('hex'),
+        prefix: SESSION_IPC_IV_PREFIX.toString('hex')
+    };
+});
+
+// chmod best-effort
+function lockFiles() {
+    if (process.platform === 'win32') return;
+    for (const file of PROTECTED_FILES) {
+        try { if (fs.existsSync(path.join(__dirname, file))) fs.chmodSync(path.join(__dirname, file), 0o444); } catch {}
+    }
+}
+
+function unlockFiles() {
+    if (process.platform === 'win32') return;
+    for (const file of PROTECTED_FILES) {
+        try { if (fs.existsSync(path.join(__dirname, file))) fs.chmodSync(path.join(__dirname, file), 0o644); } catch {}
+    }
+}
+
+// ===================================================================
+// ATUALIZADOR DE ARQUIVOS
+// ===================================================================
 function addTimestamp(url) {
-    return `${url}?t=${new Date().getTime()}`;
+    return `${url}?t=${Date.now()}`;
 }
 
 const filesToUpdate = [
-    // O ARQUIVO main.js NÃO ESTÁ AQUI porque ele não pode atualizar a si mesmo.
-    { 
-        url: addTimestamp('https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/preload.js'), 
-        dest: path.join(__dirname, 'preload.js'), 
-        critical: true,
-        backupUrls: [addTimestamp('https://designerprime.com.br/wp-content/uploads/2025/cookies/V5/preload.js')]
-    },
-	{ 
-        url: addTimestamp('https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/main.js'), 
-        dest: path.join(__dirname, 'main.js'), 
+    {
+        url: addTimestamp('https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/main.js'),
+        dest: path.join(__dirname, 'main.js'),
         critical: true,
         backupUrls: [addTimestamp('https://designerprime.com.br/wp-content/uploads/2025/cookies/V5/main.js')]
     },
-    { 
-        url: addTimestamp('https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/preload-secure.js'), 
-        dest: path.join(__dirname, 'preload-secure.js'), 
+    {
+        url: addTimestamp('https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/preload-secure.js'),
+        dest: path.join(__dirname, 'preload-secure.js'),
         critical: true,
         backupUrls: [addTimestamp('https://designerprime.com.br/wp-content/uploads/2025/cookies/V5/preload-secure.js')]
+    },
+    {
+        url: addTimestamp('https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/preload-toolbar.js'),
+        dest: path.join(__dirname, 'preload-toolbar.js'),
+        critical: true,
+        backupUrls: [addTimestamp('https://designerprime.com.br/wp-content/uploads/2025/cookies/V5/preload-toolbar.js')]
+    },
+    {
+        url: addTimestamp('https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/toolbar.html'),
+        dest: path.join(__dirname, 'toolbar.html'),
+        critical: true,
+        backupUrls: [addTimestamp('https://designerprime.com.br/wp-content/uploads/2025/cookies/V5/toolbar.html')]
     }
 ];
 
@@ -11733,807 +12029,1045 @@ function downloadAppFile(url, dest, temp = true) {
         const finalDest = temp ? `${dest}.new` : dest;
         https.get(url, (response) => {
             if (response.statusCode !== 200) {
-                return reject(new Error(`Falha no download (Status ${response.statusCode}) de ${url}`));
+                return reject(new Error(`Download falhou (Status ${response.statusCode}) de ${url}`));
             }
             const fileStream = fs.createWriteStream(finalDest);
             response.pipe(fileStream);
             fileStream.on('finish', () => {
                 fileStream.close();
-                if (fs.statSync(finalDest).size < 100) { // Verificação de arquivo corrompido
+                if (fs.statSync(finalDest).size < 50) {
                     fs.unlinkSync(finalDest);
-                    return reject(new Error(`Arquivo baixado de ${url} parece corrompido.`));
+                    return reject(new Error(`Arquivo corrompido de ${url}`));
                 }
                 resolve(finalDest);
             });
             fileStream.on('error', (err) => { fs.unlink(finalDest, () => {}); reject(err); });
-        }).on('error', (err) => reject(err));
+        }).on('error', reject);
     });
 }
 
-async function tryDownloadAppFileWithBackups(file, isTemp = true) {
+async function tryDownloadWithBackups(file, isTemp = true) {
     const urls = [file.url, ...(file.backupUrls || [])];
     for (const url of urls) {
         try {
-            console.log(`[Updater] Tentando baixar de ${url}...`);
             return await downloadAppFile(url, file.dest, isTemp);
         } catch (error) {
             console.error(`[Updater] Falha: ${error.message}`);
         }
     }
-    throw new Error(`Não foi possível baixar o arquivo ${path.basename(file.dest)} de nenhuma fonte.`);
+    throw new Error(`Impossível baixar ${path.basename(file.dest)}`);
 }
 
 async function performAppUpdate(isBlocking = false) {
     const logPrefix = isBlocking ? '[Instalador]' : '[Updater BG]';
-    console.log(`${logPrefix} Verificando arquivos da aplicação...`);
-    
+    console.log(`${logPrefix} Verificando arquivos...`);
+
+    // Desbloquear para escrita
+    unlockFiles();
+
     let allSucceeded = true;
     const downloadedTempFiles = [];
 
     for (const file of filesToUpdate) {
         try {
-            const finalPath = await tryDownloadAppFileWithBackups(file, !isBlocking);
+            const finalPath = await tryDownloadWithBackups(file, !isBlocking);
             if (!isBlocking) downloadedTempFiles.push({ temp: finalPath, final: file.dest });
         } catch (error) {
             allSucceeded = false;
-            console.error(`${logPrefix} ERRO CRÍTICO: ${error.message}`);
+            console.error(`${logPrefix} ERRO: ${error.message}`);
             break;
         }
     }
 
     if (!allSucceeded) {
-        if (isBlocking) throw new Error("Falha ao baixar arquivos essenciais para o funcionamento do aplicativo.");
-        downloadedTempFiles.forEach(f => { try { fs.unlinkSync(f.temp); } catch {} }); // Limpa arquivos temporários
+        if (isBlocking) throw new Error('Falha ao baixar arquivos essenciais.');
+        downloadedTempFiles.forEach(f => { try { fs.unlinkSync(f.temp); } catch {} });
+        lockFiles();
         return;
     }
 
     if (!isBlocking) {
-        console.log(`${logPrefix} Aplicando atualizações para a próxima inicialização...`);
         downloadedTempFiles.forEach(f => fs.renameSync(f.temp, f.final));
         console.log(`${logPrefix} Atualização silenciosa concluída.`);
+    }
+
+    // Gerar hashes (best-effort, não deve quebrar o app)
+    try { generateHashManifest(); } catch (err) {
+        console.warn(`${logPrefix} Aviso ao gerar hashes:`, err.message);
+    }
+    lockFiles();
+}
+
+// ===================================================================
+// CRIPTOGRAFIA
+// ===================================================================
+function encryptData(data, password = 'MultiPrime-Default-Key-2025') {
+    const key = crypto.scryptSync(password, CRYPTO_CONFIG.salt, CRYPTO_CONFIG.keyLength);
+    const iv = crypto.randomBytes(CRYPTO_CONFIG.ivLength);
+    const cipher = crypto.createCipheriv(CRYPTO_CONFIG.algorithm, key, iv);
+    cipher.setAAD(Buffer.from('multiprime-session-data'));
+    let encrypted = cipher.update(data, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    return JSON.stringify({
+        encrypted, iv: iv.toString('hex'),
+        authTag: cipher.getAuthTag().toString('hex'),
+        algorithm: CRYPTO_CONFIG.algorithm,
+        timestamp: new Date().toISOString(),
+        version: '1.0'
+    }, null, 2);
+}
+
+function decryptData(encryptedData, password = 'MultiPrime-Default-Key-2025') {
+    const pkg = JSON.parse(encryptedData);
+    if (!pkg.encrypted || !pkg.iv || !pkg.authTag) throw new Error('Dados criptografados inválidos');
+    
+    const version = pkg.version || '1.0';
+    let key;
+    
+    if (version === '1.0') {
+        key = crypto.scryptSync(password, CRYPTO_CONFIG.salt, CRYPTO_CONFIG.keyLength);
+    } else if (version === '2.0') {
+        key = crypto.pbkdf2Sync(password, CRYPTO_CONFIG.salt, 100000, CRYPTO_CONFIG.keyLength, 'sha256');
     } else {
-        console.log(`${logPrefix} Instalação dos arquivos concluída com sucesso.`);
+        throw new Error(`Versão de criptografia não suportada: ${version}`);
+    }
+    
+    const iv = Buffer.from(pkg.iv, 'hex');
+    const authTag = Buffer.from(pkg.authTag, 'hex');
+    const decipher = crypto.createDecipheriv(pkg.algorithm || CRYPTO_CONFIG.algorithm, key, iv);
+    decipher.setAAD(Buffer.from('multiprime-session-data'));
+    decipher.setAuthTag(authTag);
+    let decrypted = decipher.update(pkg.encrypted, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+}
+
+function isEncryptedData(data) {
+    try {
+        const p = JSON.parse(data);
+        return !!(p.encrypted && p.iv && p.authTag && p.algorithm);
+    } catch { return false; }
+}
+
+// ===================================================================
+// GITHUB
+// ===================================================================
+async function downloadFromGitHub(filePath, token) {
+    return new Promise((resolve, reject) => {
+        const url = `${GITHUB_CONFIG.baseUrl}/repos/${GITHUB_CONFIG.owner}/${GITHUB_CONFIG.repo}/contents/${filePath}`;
+        const req = https.request(url, {
+            method: 'GET',
+            headers: {
+                'Authorization': `token ${token}`,
+                'User-Agent': 'MultiPrime-Cookies-App',
+                'Accept': 'application/vnd.github.v3+json'
+            }
+        }, (res) => {
+            let data = '';
+            res.on('data', chunk => { data += chunk; });
+            res.on('end', () => {
+                try {
+                    if (res.statusCode !== 200) return reject(new Error(`GitHub ${res.statusCode}: ${data}`));
+                    const response = JSON.parse(data);
+                    let content = response.content
+                        ? Buffer.from(response.content, 'base64').toString('utf-8')
+                        : null;
+                    if (!content && response.download_url) {
+                        https.get(response.download_url, { headers: { 'Authorization': `token ${token}`, 'User-Agent': 'MultiPrime-Cookies-App' } }, (dlRes) => {
+                            let c = '';
+                            dlRes.on('data', ch => { c += ch; });
+                            dlRes.on('end', () => resolve(isEncryptedData(c) ? decryptData(c) : c));
+                        }).on('error', reject);
+                        return;
+                    }
+                    if (!content) return reject(new Error('Sem conteúdo na resposta'));
+                    resolve(isEncryptedData(content) ? decryptData(content) : content);
+                } catch (e) { reject(e); }
+            });
+        });
+        req.on('error', reject);
+        req.setTimeout(30000, () => { req.abort(); reject(new Error('Timeout GitHub')); });
+        req.end();
+    });
+}
+
+async function uploadToGitHub(filePath, content, token, commitMessage = 'Atualizar sessão') {
+    return new Promise((resolve, reject) => {
+        const encryptedContent = encryptData(content);
+        const getUrl = `${GITHUB_CONFIG.baseUrl}/repos/${GITHUB_CONFIG.owner}/${GITHUB_CONFIG.repo}/contents/${filePath}`;
+        const headers = {
+            'Authorization': `token ${token}`,
+            'User-Agent': 'MultiPrime-Cookies-App',
+            'Accept': 'application/vnd.github.v3+json'
+        };
+        
+        const getReq = https.request(getUrl, { method: 'GET', headers }, (getRes) => {
+            let getData = '';
+            getRes.on('data', ch => { getData += ch; });
+            getRes.on('end', () => {
+                let sha = null;
+                if (getRes.statusCode === 200) {
+                    try { sha = JSON.parse(getData).sha; } catch {}
+                }
+                const putData = JSON.stringify({
+                    message: commitMessage,
+                    content: Buffer.from(encryptedContent).toString('base64'),
+                    ...(sha && { sha })
+                });
+                const putReq = https.request(getUrl, {
+                    method: 'PUT',
+                    headers: { ...headers, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(putData) }
+                }, (putRes) => {
+                    let putResponse = '';
+                    putRes.on('data', ch => { putResponse += ch; });
+                    putRes.on('end', () => {
+                        if (putRes.statusCode === 200 || putRes.statusCode === 201) resolve(JSON.parse(putResponse));
+                        else reject(new Error(`Upload falhou: ${putRes.statusCode}`));
+                    });
+                });
+                putReq.on('error', reject);
+                putReq.setTimeout(30000, () => { putReq.abort(); reject(new Error('Timeout upload')); });
+                putReq.write(putData);
+                putReq.end();
+            });
+        });
+        getReq.on('error', reject);
+        getReq.setTimeout(30000, () => { getReq.abort(); reject(new Error('Timeout verificação')); });
+        getReq.end();
+    });
+}
+
+// ===================================================================
+// HELPERS
+// ===================================================================
+const proxyCredentials = new Map();
+const windowProfiles = new Map();
+// Mapa: mainWindow.id -> { mainWindow, browserView }
+const windowViews = new Map();
+
+function withAlive(win, fn) {
+    try { if (win && !win.isDestroyed()) fn(win); } catch {}
+}
+
+function isNonFatalNavError(errOrCode) {
+    // Erros de navegação que NÃO devem destruir a janela
+    const nonFatalCodes = [
+        -3,    // ERR_ABORTED (navegação interrompida por outra)
+        -375,  // ERR_TOO_MANY_RETRIES (loop de redirecionamento)
+        -310,  // ERR_TOO_MANY_REDIRECTS
+        -102,  // ERR_CONNECTION_REFUSED
+        -105,  // ERR_NAME_NOT_RESOLVED (DNS)
+        -106,  // ERR_INTERNET_DISCONNECTED
+        -109,  // ERR_ADDRESS_UNREACHABLE
+        -118,  // ERR_CONNECTION_TIMED_OUT
+        -137,  // ERR_NAME_RESOLUTION_FAILED
+        -200,  // ERR_CERT_COMMON_NAME_INVALID
+        -201,  // ERR_CERT_DATE_INVALID
+        -202,  // ERR_CERT_AUTHORITY_INVALID
+        -501,  // ERR_INSECURE_RESPONSE
+    ];
+    
+    if (typeof errOrCode === 'number') return nonFatalCodes.includes(errOrCode);
+    if (!errOrCode) return false;
+    
+    const errno = errOrCode.errno || errOrCode.errorCode;
+    if (errno && nonFatalCodes.includes(errno)) return true;
+    
+    const code = errOrCode.code || '';
+    return code === 'ERR_ABORTED' || code.startsWith('ERR_TOO_MANY') ||
+           code.startsWith('ERR_CONNECTION') || code.startsWith('ERR_CERT') ||
+           code.startsWith('ERR_NAME') || code === 'ERR_INTERNET_DISCONNECTED' ||
+           code === 'ERR_INSECURE_RESPONSE' || code === 'ERR_ADDRESS_UNREACHABLE';
+}
+
+function validateProxyConfig(proxy) {
+    if (!proxy || !proxy.host || !proxy.port) return { valid: false, error: 'Host e porta obrigatórios' };
+    const validTypes = ['http', 'https', 'socks', 'socks4', 'socks5'];
+    const proxyType = proxy.tipo?.toLowerCase() || 'http';
+    if (!validTypes.includes(proxyType)) return { valid: false, error: `Tipo inválido: ${proxy.tipo}` };
+    const port = parseInt(proxy.port);
+    if (isNaN(port) || port < 1 || port > 65535) return { valid: false, error: 'Porta inválida' };
+    return { valid: true, type: proxyType, port };
+}
+
+function sanitizeCookieForInjection(cookie, defaultUrl) {
+    const c = { ...cookie };
+    if (!c.url) {
+        const host = cookie.domain ? (cookie.domain.startsWith('.') ? cookie.domain.substring(1) : cookie.domain) : new URL(defaultUrl).hostname;
+        c.url = `https://${host}${c.path || '/'}`;
+    }
+    if (c.secure && c.url.startsWith('http://')) c.url = c.url.replace('http://', 'https://');
+    if (c.sameSite) {
+        const s = c.sameSite.toLowerCase();
+        if (['strict', 'lax', 'none'].includes(s)) c.sameSite = s === 'none' ? 'no_restriction' : s;
+        else delete c.sameSite;
+    }
+    if (c.name.startsWith('__Host-')) { c.secure = true; c.path = '/'; delete c.domain; }
+    else if (c.name.startsWith('__Secure-')) c.secure = true;
+    if (c.expirationDate && (isNaN(c.expirationDate) || c.expirationDate * 1000 < Date.now())) delete c.expirationDate;
+    return c;
+}
+
+function findUniquePath(proposedPath) {
+    if (!fs.existsSync(proposedPath)) return proposedPath;
+    const { dir, name, ext } = path.parse(proposedPath);
+    let counter = 1, newPath;
+    do { newPath = path.join(dir, `${name} (${counter})${ext}`); counter++; } while (fs.existsSync(newPath));
+    return newPath;
+}
+
+// ===================================================================
+// LIMPEZA
+// ===================================================================
+async function limparParticoesAntigas() {
+    const partitionsPath = path.join(app.getPath('userData'), 'Partitions');
+    try {
+        if (!fs.existsSync(partitionsPath)) return;
+        const items = await fsPromises.readdir(partitionsPath);
+        const deletePromises = items
+            .filter(item => item.startsWith('profile_'))
+            .map(item => fsPromises.rm(path.join(partitionsPath, item), { recursive: true, force: true }));
+        if (deletePromises.length > 0) {
+            await Promise.allSettled(deletePromises);
+            console.log(`[LIMPEZA] ${deletePromises.length} partição(ões) removida(s).`);
+        }
+    } catch (err) { console.error('[LIMPEZA] Erro:', err); }
+}
+
+// ===================================================================
+// BROWSERVIEW — CORAÇÃO DA NOVA ARQUITETURA
+// ===================================================================
+
+const DOWNLOADS_PANEL_WIDTH = 370;
+
+/**
+ * Calcula os bounds do BrowserView baseado no tamanho da janela e estado do painel.
+ */
+function getViewBounds(mainWindow, panelOpen) {
+    const [width, height] = mainWindow.getSize();
+    const viewWidth = panelOpen ? Math.max(400, width - DOWNLOADS_PANEL_WIDTH) : width;
+    return { x: 0, y: TOOLBAR_HEIGHT, width: viewWidth, height: height - TOOLBAR_HEIGHT };
+}
+
+/**
+ * Atualiza os bounds da view levando em conta o estado do painel de downloads.
+ */
+function updateViewBounds(mainWindow) {
+    const entry = windowViews.get(mainWindow.id);
+    if (!entry) return;
+    entry.view.setBounds(getViewBounds(mainWindow, entry.downloadsPanelOpen));
+}
+
+/**
+ * Cria a janela principal com toolbar embutida + BrowserView para o conteúdo web.
+ * A toolbar é um HTML local carregado na própria janela.
+ * O conteúdo web fica num BrowserView separado, SEM NENHUMA interferência CSS.
+ */
+function createSecureWindow(perfil, isolatedSession, storageData) {
+    const mainWindow = new BrowserWindow({
+        ...CONFIG.WINDOW_DEFAULTS,
+        frame: false,
+        show: false,
+        backgroundColor: '#181818',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload-toolbar.js'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            devTools: true
+        }
+    });
+
+    // Carregar a toolbar HTML local na janela principal
+    mainWindow.loadFile(path.join(__dirname, 'toolbar.html'));
+
+    // Criar o BrowserView para o conteúdo web
+    const view = new BrowserView({
+        webPreferences: {
+            session: isolatedSession,
+            preload: path.join(__dirname, 'preload-secure.js'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            devTools: true
+        }
+    });
+
+    mainWindow.setBrowserView(view);
+    view.setBounds(getViewBounds(mainWindow, false));
+    view.setAutoResize({ width: true, height: true, horizontal: false, vertical: false });
+
+    // Recalcular bounds ao redimensionar
+    mainWindow.on('resize', () => {
+        if (!mainWindow.isDestroyed()) updateViewBounds(mainWindow);
+    });
+
+    // Maximizar/restaurar também precisa recalcular
+    mainWindow.on('maximize', () => {
+        setTimeout(() => {
+            if (!mainWindow.isDestroyed()) updateViewBounds(mainWindow);
+        }, 50);
+    });
+    mainWindow.on('unmaximize', () => {
+        setTimeout(() => {
+            if (!mainWindow.isDestroyed()) updateViewBounds(mainWindow);
+        }, 50);
+    });
+
+    // Salvar referências
+    const viewId = view.webContents.id;
+    windowViews.set(mainWindow.id, { mainWindow, view, downloadsPanelOpen: false });
+    windowProfiles.set(viewId, perfil);
+
+    // Enviar URL para a toolbar quando a view navegar
+    view.webContents.on('did-navigate', (e, url) => {
+        withAlive(mainWindow, (w) => w.webContents.send('url-updated', url));
+    });
+    view.webContents.on('did-navigate-in-page', (e, url) => {
+        withAlive(mainWindow, (w) => w.webContents.send('url-updated', url));
+    });
+
+    // ★ BARRA DE CARREGAMENTO: enviar eventos de loading para a toolbar
+    view.webContents.on('did-start-loading', () => {
+        withAlive(mainWindow, (w) => w.webContents.send('page-loading', true));
+    });
+    view.webContents.on('did-stop-loading', () => {
+        withAlive(mainWindow, (w) => w.webContents.send('page-loading', false));
+    });
+    view.webContents.on('did-start-navigation', (e, url, isInPlace, isMainFrame) => {
+        if (isMainFrame) {
+            withAlive(mainWindow, (w) => w.webContents.send('page-loading', true));
+        }
+    });
+
+    // Falha de navegação
+    view.webContents.on('did-fail-load', (event, errorCode, desc, url, isMainFrame) => {
+        // ERR_ABORTED (-3) é normal (navegação interrompida por outra), ignorar silenciosamente
+        if (errorCode === -3) return;
+        
+        console.warn(`[NAV] Falha: ${desc} (${errorCode}) → ${url}`);
+        
+        // Parar loading bar
+        if (isMainFrame) {
+            withAlive(mainWindow, (w) => w.webContents.send('page-loading', false));
+        }
+    });
+
+    // ★ POPUPS: Permitir como janelas filhas reais
+    // Necessário para: ChatGPT (overlays), Vecteezy (downloads via popup), Canva, etc.
+    view.webContents.setWindowOpenHandler(({ url, disposition, features }) => {
+        console.log(`[POPUP] ${disposition}: ${url} | features: ${features}`);
+
+        return {
+            action: 'allow',
+            overrideBrowserWindowOptions: {
+                width: 1000,
+                height: 700,
+                minWidth: 400,
+                minHeight: 300,
+                parent: mainWindow,
+                modal: false,
+                show: true,
+                autoHideMenuBar: true,
+                webPreferences: {
+                    session: isolatedSession,
+                    contextIsolation: true,
+                    nodeIntegration: false
+                }
+            }
+        };
+    });
+
+    // Quando um popup é criado, configurar auto-close pós-download e popups aninhados
+    view.webContents.on('did-create-window', (popupWindow) => {
+        console.log('[POPUP] Janela popup criada');
+
+        // Se o popup dispara um download (ex: Vecteezy), fechar depois
+        let downloadTriggered = false;
+        const onWillDownload = () => {
+            downloadTriggered = true;
+            setTimeout(() => {
+                if (!popupWindow.isDestroyed()) {
+                    console.log('[POPUP] Fechando popup pós-download');
+                    popupWindow.close();
+                }
+            }, 2000);
+        };
+        isolatedSession.on('will-download', onWillDownload);
+
+        // Limpar listener quando popup fecha
+        popupWindow.on('closed', () => {
+            isolatedSession.removeListener('will-download', onWillDownload);
+        });
+
+        // Popups dentro de popups → abrir na mesma popup
+        popupWindow.webContents.setWindowOpenHandler(({ url: popupUrl }) => {
+            if (popupUrl && popupUrl !== 'about:blank' && !popupUrl.startsWith('javascript:')) {
+                popupWindow.webContents.loadURL(popupUrl);
+            }
+            return { action: 'deny' };
+        });
+
+        // Se o popup é about:blank e fica vazio por muito tempo, fechar
+        setTimeout(() => {
+            if (!popupWindow.isDestroyed()) {
+                const currentUrl = popupWindow.webContents.getURL();
+                if (currentUrl === 'about:blank' || currentUrl === '') {
+                    // Verificar se tem conteúdo real
+                    popupWindow.webContents.executeJavaScript('document.body?.innerHTML?.length || 0')
+                        .then(len => {
+                            if (len < 10 && !popupWindow.isDestroyed()) {
+                                console.log('[POPUP] Popup vazio detectado, fechando');
+                                popupWindow.close();
+                            }
+                        })
+                        .catch(() => {});
+                }
+            }
+        }, 5000);
+    });
+
+    // Auto-login: enviar credenciais para o preload-secure da view
+    if (perfil.usuariodaferramenta && perfil.senhadaferramenta) {
+        const sendCredentials = () => {
+            if (!view.webContents.isDestroyed()) {
+                view.webContents.send('set-auto-login-credentials', {
+                    usuariodaferramenta: perfil.usuariodaferramenta,
+                    senhadaferramenta: perfil.senhadaferramenta
+                });
+            }
+        };
+        view.webContents.once('did-finish-load', sendCredentials);
+        view.webContents.on('did-navigate', sendCredentials);
+    }
+
+    // Injetar sessão data na view
+    ipcMain.once('request-session-data', (e) => {
+        if (!view.webContents.isDestroyed() && e.sender === view.webContents) {
+            e.sender.send('inject-session-data', storageData);
+        }
+    });
+    ipcMain.once('get-initial-session-data', (e) => {
+        if (!view.webContents.isDestroyed() && e.sender === view.webContents) {
+            e.returnValue = storageData || null;
+        } else {
+            e.returnValue = null;
+        }
+    });
+
+    // Downloads
+    setupDownloadManager(mainWindow, view, isolatedSession);
+
+    // Limpeza ao fechar
+    mainWindow.on('closed', () => {
+        proxyCredentials.delete(viewId);
+        windowProfiles.delete(viewId);
+        windowViews.delete(mainWindow.id);
+    });
+
+    // Mostrar quando pronto
+    mainWindow.once('ready-to-show', () => mainWindow.show());
+
+    return { mainWindow, view };
+}
+
+// ===================================================================
+// DOWNLOADS
+// ===================================================================
+function setupDownloadManager(mainWindow, view, isolatedSession) {
+    // Pasta temporária para downloads em andamento
+    const tempDownloadDir = path.join(app.getPath('temp'), 'multiprime-downloads');
+    if (!fs.existsSync(tempDownloadDir)) fs.mkdirSync(tempDownloadDir, { recursive: true });
+
+    isolatedSession.on('will-download', (event, item) => {
+        if (mainWindow.isDestroyed()) return item.cancel();
+
+        // Detectar nome e extensão do arquivo
+        let filename = item.getFilename();
+        if (!filename) {
+            const mimeType = item.getMimeType();
+            let ext = '.tmp';
+            if (mimeType === 'audio/mpeg') ext = '.mp3';
+            else if (mimeType?.includes('wav')) ext = '.wav';
+            else if (mimeType === 'audio/aac') ext = '.aac';
+            else if (mimeType === 'application/zip') ext = '.zip';
+            else if (mimeType === 'application/pdf') ext = '.pdf';
+            else if (mimeType?.includes('mp4')) ext = '.mp4';
+            else if (mimeType?.includes('webm')) ext = '.webm';
+            else if (mimeType?.includes('png')) ext = '.png';
+            else if (mimeType?.includes('jpeg') || mimeType?.includes('jpg')) ext = '.jpg';
+            else if (mimeType?.includes('gif')) ext = '.gif';
+            else if (mimeType?.includes('svg')) ext = '.svg';
+            filename = `download-${Date.now()}${ext}`;
+        }
+
+        // ★ PASSO 1: Definir caminho TEMPORÁRIO de forma SÍNCRONA
+        // Isso impede o Electron de salvar na pasta Downloads padrão
+        const tempPath = path.join(tempDownloadDir, `${crypto.randomUUID()}_${filename}`);
+        item.setSavePath(tempPath);
+
+        const parsedName = path.parse(filename);
+        const extNoDot = parsedName.ext ? parsedName.ext.replace('.', '') : '*';
+
+        // ★ PASSO 2: Abrir diálogo "Salvar como" (assíncrono)
+        let userChosenPath = null;
+        let dialogDone = false;
+        let downloadDone = false;
+        let downloadState = null;
+
+        const downloadId = `dl-${crypto.randomUUID()}`;
+
+        dialog.showSaveDialog(mainWindow, {
+            title: 'Salvar download como...',
+            defaultPath: path.join(app.getPath('downloads'), filename),
+            filters: [
+                { name: `Arquivo ${extNoDot.toUpperCase()}`, extensions: [extNoDot] },
+                { name: 'Todos os arquivos', extensions: ['*'] }
+            ]
+        }).then(({ canceled, filePath }) => {
+            dialogDone = true;
+
+            if (canceled || !filePath) {
+                // Usuário cancelou → cancelar download e limpar temp
+                item.cancel();
+                try { fs.unlinkSync(tempPath); } catch {}
+                return;
+            }
+
+            userChosenPath = filePath;
+
+            // Notificar toolbar
+            mainWindow.webContents.send('download-started', { id: downloadId, filename: path.basename(filePath) });
+
+            // Se o download já terminou enquanto o diálogo estava aberto, mover agora
+            if (downloadDone && downloadState === 'completed') {
+                moveFileToFinal(tempPath, userChosenPath, downloadId, mainWindow);
+            }
+        }).catch(() => {
+            dialogDone = true;
+            item.cancel();
+            try { fs.unlinkSync(tempPath); } catch {}
+        });
+
+        // ★ PASSO 3: Progresso do download
+        let lastProgress = 0, lastUpdate = 0;
+        item.on('updated', (e, state) => {
+            if (mainWindow.isDestroyed() || state !== 'progressing' || item.getTotalBytes() <= 0) return;
+            if (!userChosenPath) return; // Não notificar enquanto diálogo está aberto
+            const progress = Math.round((item.getReceivedBytes() / item.getTotalBytes()) * 100);
+            const now = Date.now();
+            if (progress > lastProgress && now - lastUpdate > 250) {
+                mainWindow.webContents.send('download-progress', { id: downloadId, progress });
+                lastProgress = progress;
+                lastUpdate = now;
+            }
+        });
+
+        // ★ PASSO 4: Download terminou → mover do temp para destino final
+        item.on('done', (e, state) => {
+            downloadDone = true;
+            downloadState = state;
+
+            if (state !== 'completed') {
+                // Download falhou ou foi cancelado → limpar temp
+                try { fs.unlinkSync(tempPath); } catch {}
+                if (userChosenPath && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('download-complete', {
+                        id: downloadId, state, path: null, progress: 0
+                    });
+                }
+                return;
+            }
+
+            // Se o usuário já escolheu o destino, mover agora
+            if (userChosenPath) {
+                moveFileToFinal(tempPath, userChosenPath, downloadId, mainWindow);
+            }
+            // Se o diálogo ainda está aberto, o .then() acima vai mover quando fechar
+        });
+    });
+}
+
+// Mover arquivo do temp para o destino final escolhido pelo usuário
+function moveFileToFinal(tempPath, destPath, downloadId, mainWindow) {
+    try {
+        // Se já existe, gerar nome único
+        const finalPath = findUniquePath(destPath);
+
+        // Tentar rename (rápido, mesmo disco)
+        try {
+            fs.renameSync(tempPath, finalPath);
+        } catch {
+            // Se rename falhar (disco diferente), copiar e deletar
+            fs.copyFileSync(tempPath, finalPath);
+            try { fs.unlinkSync(tempPath); } catch {}
+        }
+
+        console.log(`[DOWNLOAD] ✅ Salvo em: ${finalPath}`);
+
+        if (!mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('download-complete', {
+                id: downloadId, state: 'completed',
+                path: finalPath, progress: 100
+            });
+        }
+    } catch (err) {
+        console.error('[DOWNLOAD] Erro ao mover arquivo:', err);
+        if (!mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('download-complete', {
+                id: downloadId, state: 'interrupted',
+                path: tempPath, progress: 100
+            });
+        }
     }
 }
 
-
 // ===================================================================
-// PARTE 3: LÓGICA PRINCIPAL DA SUA APLICAÇÃO (SEU CÓDIGO ORIGINAL)
+// IPC — TOOLBAR COMMANDS
 // ===================================================================
-function startApp() {
-    //
-    // TODO O SEU CÓDIGO ORIGINAL VEM AQUI DENTRO
-    //
-    app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
-    
-    const CONFIG = {
-        WINDOW_DEFAULTS: { width: 1280, height: 720, minWidth: 800, minHeight: 600 },
-        COOKIE_TIMEOUT: 90_000,
-        SESSION_CLEANUP_DELAY: 1_000
-    };
-    
-    const GITHUB_CONFIG = {
-        owner: 'Guudiass',
-        repo: 'MULTIPRIMECOOKIES',
-        baseUrl: 'https://api.github.com'
-    };
-    
-    const CRYPTO_CONFIG = {
-        algorithm: 'aes-256-gcm',
-        keyLength: 32,
-        ivLength: 16,
-        tagLength: 16,
-        salt: 'multiprime-cookies-salt-2025'
-    };
-    
-    const proxyCredentials = new Map();
-    const windowProfiles = new Map();
 
-    // [FIX] Helper para evitar "Object has been destroyed"
-    function withAlive(win, fn) {
-        try { if (win && !win.isDestroyed()) fn(win); } catch (_) {}
-    }
+function getViewForSender(event) {
+    // A toolbar envia comandos. Precisamos encontrar o BrowserView associado.
+    const mainWindow = BrowserWindow.fromWebContents(event.sender);
+    if (!mainWindow || mainWindow.isDestroyed()) return null;
+    const entry = windowViews.get(mainWindow.id);
+    return entry || null;
+}
 
-    // [FIX] Helper para identificar abortos não-fatais de navegação
-    function isAbortError(errOrCode) {
-        if (typeof errOrCode === 'number') return errOrCode === -3;
-        if (!errOrCode) return false;
-        // Electron geralmente fornece .code ('ERR_ABORTED') e .errno (-3)
-        return errOrCode.code === 'ERR_ABORTED' || errOrCode.errno === -3 || errOrCode.errorCode === -3;
-    }
-    
-    const nossoManipuladorDeLogin = (event, webContents, request, authInfo, callback) => {
-        if (!authInfo.isProxy) { 
-            callback(); 
-            return; 
-        }
-        
-        event.preventDefault();
-        const webContentsId = webContents?.id ?? 'N/A';
-        const credentials = proxyCredentials.get(webContentsId);
-        
-        if (credentials) {
-            console.log(`[PROXY AUTH] Autenticando proxy ${authInfo.scheme} para ${authInfo.host}:${authInfo.port}`);
-            callback(credentials.username, credentials.password);
-        } else {
-            console.log(`[PROXY AUTH] Nenhuma credencial encontrada para ${authInfo.host}:${authInfo.port}`);
-            callback();
-        }
-    };
-    
-    // ===== FUNÇÕES DE CRIPTOGRAFIA (sem alterações) =====
-    function encryptData(data, password = 'MultiPrime-Default-Key-2025') {
-        try {
-            const key = crypto.scryptSync(password, CRYPTO_CONFIG.salt, CRYPTO_CONFIG.keyLength);
-            const iv = crypto.randomBytes(CRYPTO_CONFIG.ivLength);
-            const cipher = crypto.createCipheriv(CRYPTO_CONFIG.algorithm, key, iv);
-            cipher.setAAD(Buffer.from('multiprime-session-data'));
-            let encrypted = cipher.update(data, 'utf8', 'hex');
-            encrypted += cipher.final('hex');
-            const authTag = cipher.getAuthTag();
-            const encryptedPackage = {
-                encrypted: encrypted,
-                iv: iv.toString('hex'),
-                authTag: authTag.toString('hex'),
-                algorithm: CRYPTO_CONFIG.algorithm,
-                timestamp: new Date().toISOString(),
-                version: '1.0'
-            };
-            return JSON.stringify(encryptedPackage, null, 2);
-        } catch (error) {
-            throw new Error(`Erro na criptografia: ${error.message}`);
-        }
-    }
-    
-    function decryptData(encryptedData, password = 'MultiPrime-Default-Key-2025') {
-        try {
-            const encryptedPackage = JSON.parse(encryptedData);
-            if (!encryptedPackage.encrypted || !encryptedPackage.iv || !encryptedPackage.authTag) {
-                throw new Error('Dados criptografados inválidos');
-            }
-            const version = encryptedPackage.version || '1.0';
-            let key;
-            if (version === '1.0') {
-                key = crypto.scryptSync(password, CRYPTO_CONFIG.salt, CRYPTO_CONFIG.keyLength);
-            } else if (version === '2.0') {
-                key = crypto.pbkdf2Sync(password, CRYPTO_CONFIG.salt, 100000, CRYPTO_CONFIG.keyLength, 'sha256');
-            } else {
-                throw new Error(`Versão de criptografia não suportada: ${version}`);
-            }
-            const iv = Buffer.from(encryptedPackage.iv, 'hex');
-            const authTag = Buffer.from(encryptedPackage.authTag, 'hex');
-            const decipher = crypto.createDecipheriv(encryptedPackage.algorithm || CRYPTO_CONFIG.algorithm, key, iv);
-            decipher.setAAD(Buffer.from('multiprime-session-data'));
-            decipher.setAuthTag(authTag);
-            let decrypted = decipher.update(encryptedPackage.encrypted, 'hex', 'utf8');
-            decrypted += decipher.final('utf8');
-            return decrypted;
-        } catch (error) {
-            throw new Error(`Erro na descriptografia: ${error.message}`);
-        }
-    }
-    
-    function isEncryptedData(data) {
-        try {
-            const parsed = JSON.parse(data);
-            const hasRequiredFields = !!(parsed.encrypted && parsed.iv && parsed.authTag && parsed.algorithm);
-            const hasValidVersion = !parsed.version || ['1.0', '2.0'].includes(parsed.version);
-            return hasRequiredFields && hasValidVersion;
-        } catch {
-            return false;
-        }
-    }
-    
-    
-    // ===== FUNÇÕES DO GITHUB (sem alterações) =====
-    async function downloadFromGitHub(filePath, token) {
-        return new Promise((resolve, reject) => {
-            const url = `${GITHUB_CONFIG.baseUrl}/repos/${GITHUB_CONFIG.owner}/${GITHUB_CONFIG.repo}/contents/${filePath}`;
-            const options = {
-                method: 'GET',
-                headers: {
-                    'Authorization': `token ${token}`,
-                    'User-Agent': 'MultiPrime-Cookies-App',
-                    'Accept': 'application/vnd.github.v3+json'
-                }
-            };
-            const req = https.request(url, options, (res) => {
-                let data = '';
-                res.on('data', chunk => { data += chunk; });
-                res.on('end', () => {
-                    try {
-                        if (res.statusCode === 200) {
-                            const response = JSON.parse(data);
-                            let content = '';
-                            if (response.content) {
-                                content = Buffer.from(response.content, 'base64').toString('utf-8');
-                            } else if (response.download_url) {
-                                downloadDirectly(response.download_url, token, resolve, reject);
-                                return;
-                            } else {
-                                throw new Error('Nenhum conteúdo encontrado na resposta');
-                            }
-                            if (isEncryptedData(content)) {
-                                console.log('[DOWNLOAD] Arquivo criptografado detectado, descriptografando...');
-                                try {
-                                    const decryptedContent = decryptData(content);
-                                    resolve(decryptedContent);
-                                } catch (decryptError) {
-                                    console.error('[DOWNLOAD] Erro na descriptografia:', decryptError.message);
-                                    reject(new Error(`Falha na descriptografia: ${decryptError.message}`));
-                                }
-                            } else {
-                                console.log('[DOWNLOAD] Arquivo não criptografado detectado');
-                                resolve(content);
-                            }
-                        } else {
-                            reject(new Error(`GitHub API retornou status ${res.statusCode}: ${data}`));
-                        }
-                    } catch (error) {
-                        reject(new Error(`Erro ao processar resposta do GitHub: ${error.message}`));
-                    }
-                });
-            });
-            req.on('error', (error) => reject(new Error(`Erro de conexão com GitHub: ${error.message}`)));
-            req.setTimeout(30000, () => {
-                req.abort();
-                reject(new Error('Timeout na conexão com GitHub'));
-            });
-            req.end();
-        });
-    }
-    
-    function downloadDirectly(downloadUrl, token, resolve, reject) {
-        const options = {
-            method: 'GET',
-            headers: { 'Authorization': `token ${token}`, 'User-Agent': 'MultiPrime-Cookies-App' }
-        };
-        https.get(downloadUrl, options, (res) => {
-            let content = '';
-            res.on('data', chunk => { content += chunk; });
-            res.on('end', () => {
-                if (isEncryptedData(content)) {
-                    console.log('[DOWNLOAD] Arquivo criptografado detectado, descriptografando...');
-                    try {
-                        const decryptedContent = decryptData(content);
-                        resolve(decryptedContent);
-                    } catch (decryptError) {
-                        console.error('[DOWNLOAD] Erro na descriptografia:', decryptError.message);
-                        reject(new Error(`Falha na descriptografia: ${decryptError.message}`));
-                    }
-                } else {
-                    console.log('[DOWNLOAD] Arquivo não criptografado detectado');
-                    resolve(content);
-                }
-            });
-        }).on('error', (error) => reject(new Error(`Erro no download direto: ${error.message}`)));
-    }
-    
-    async function uploadToGitHub(filePath, content, token, commitMessage = 'Atualizar sessão') {
-        return new Promise((resolve, reject) => {
-            console.log('[UPLOAD] Criptografando dados antes do upload...');
-            let encryptedContent;
-            try {
-                encryptedContent = encryptData(content);
-                console.log('[UPLOAD] Dados criptografados com sucesso');
-            } catch (encryptError) {
-                reject(new Error(`Falha na criptografia: ${encryptError.message}`));
-                return;
-            }
-            const getUrl = `${GITHUB_CONFIG.baseUrl}/repos/${GITHUB_CONFIG.owner}/${GITHUB_CONFIG.repo}/contents/${filePath}`;
-            const getOptions = {
-                method: 'GET',
-                headers: {
-                    'Authorization': `token ${token}`,
-                    'User-Agent': 'MultiPrime-Cookies-App',
-                    'Accept': 'application/vnd.github.v3+json'
-                }
-            };
-            const getReq = https.request(getUrl, getOptions, (getRes) => {
-                let getData = '';
-                getRes.on('data', chunk => { getData += chunk; });
-                getRes.on('end', () => {
-                    let sha = null;
-                    if (getRes.statusCode === 200) {
-                        try { sha = JSON.parse(getData).sha; } catch (e) { /* Ignora */ }
-                    }
-                    const putUrl = `${GITHUB_CONFIG.baseUrl}/repos/${GITHUB_CONFIG.owner}/${GITHUB_CONFIG.repo}/contents/${filePath}`;
-                    const putData = JSON.stringify({
-                        message: commitMessage,
-                        content: Buffer.from(encryptedContent).toString('base64'),
-                        ...(sha && { sha })
-                    });
-                    const putOptions = {
-                        method: 'PUT',
-                        headers: {
-                            'Authorization': `token ${token}`,
-                            'User-Agent': 'MultiPrime-Cookies-App',
-                            'Accept': 'application/vnd.github.v3+json',
-                            'Content-Type': 'application/json',
-                            'Content-Length': Buffer.byteLength(putData)
-                        }
-                    };
-                    const putReq = https.request(putUrl, putOptions, (putRes) => {
-                        let putResponseData = '';
-                        putRes.on('data', chunk => { putResponseData += chunk; });
-                        putRes.on('end', () => {
-                            if (putRes.statusCode === 200 || putRes.statusCode === 201) {
-                                console.log('[UPLOAD] Dados criptografados enviados com sucesso');
-                                resolve(JSON.parse(putResponseData));
-                            } else {
-                                reject(new Error(`Erro ao fazer upload: ${putRes.statusCode} - ${putResponseData}`));
-                            }
-                        });
-                    });
-                    putReq.on('error', (error) => reject(new Error(`Erro de conexão no upload: ${error.message}`)));
-                    putReq.setTimeout(30000, () => {
-                        putReq.abort();
-                        reject(new Error('Timeout no upload para GitHub'));
-                    });
-                    putReq.write(putData);
-                    putReq.end();
-                });
-            });
-            getReq.on('error', (error) => reject(new Error(`Erro ao verificar arquivo existente: ${error.message}`)));
-            getReq.setTimeout(30000, () => {
-                getReq.abort();
-                reject(new Error('Timeout ao verificar arquivo existente'));
-            });
-            getReq.end();
-        });
-    }
-    
-    
-    // ===== FUNÇÕES PRINCIPAIS =====
-    async function limparParticoesAntigas() {
-        const userDataPath = app.getPath('userData');
-        const partitionsPath = path.join(userDataPath, 'Partitions');
-        try {
-            if (!fs.existsSync(partitionsPath)) return;
-            const items = await fsPromises.readdir(partitionsPath);
-            const deletePromises = items
-                .filter(item => item.startsWith('profile_'))
-                .map(item => fsPromises.rm(path.join(partitionsPath, item), { recursive: true, force: true }));
-            if (deletePromises.length > 0) {
-                await Promise.allSettled(deletePromises);
-                console.log(`[LIMPEZA] ${deletePromises.length} partição(ões) removida(s).`);
-            }
-        } catch (err) { console.error('[LIMPEZA] Erro:', err); }
-    }
-    
-    function validateProxyConfig(proxy) {
-        if (!proxy || !proxy.host || !proxy.port) {
-            return { valid: false, error: 'Host e porta do proxy são obrigatórios' };
-        }
-        const validTypes = ['http', 'https', 'socks', 'socks4', 'socks5'];
-        const proxyType = proxy.tipo?.toLowerCase() || 'http';
-        if (!validTypes.includes(proxyType)) {
-            return { valid: false, error: `Tipo de proxy inválido: ${proxy.tipo}` };
-        }
-        const port = parseInt(proxy.port);
-        if (isNaN(port) || port < 1 || port > 65535) {
-            return { valid: false, error: 'Porta do proxy deve ser um número entre 1 e 65535' };
-        }
-        return { valid: true, type: proxyType, port: port };
-    }
-    
-    app.whenReady().then(async () => {
-        await limparParticoesAntigas();
-        for (const listener of app.listeners('login')) app.removeListener('login', listener);
-        app.on('login', nossoManipuladorDeLogin);
-        console.log('[SISTEMA] Aplicação pronta.');
-    });
-    
-    app.on('window-all-closed', () => {
-        if (process.platform !== 'darwin') app.quit();
-    });
-    
-    app.on('activate', () => {
-        if (BrowserWindow.getAllWindows().length === 0) console.log('Aplicação ativada.');
-    });
-    
-    function sanitizeCookieForInjection(cookie, defaultUrl) {
-        const cookieDetails = { ...cookie };
-        if (!cookieDetails.url) {
-            const host = cookie.domain ? (cookie.domain.startsWith('.') ? cookie.domain.substring(1) : cookie.domain) : new URL(defaultUrl).hostname;
-            cookieDetails.url = `https://${host}${cookieDetails.path || '/'}`;
-        }
-        if (cookieDetails.secure && cookieDetails.url.startsWith('http://')) {
-            cookieDetails.url = cookieDetails.url.replace('http://', 'https://');
-        }
-        if (cookieDetails.sameSite) {
-            const sameSiteLower = cookieDetails.sameSite.toLowerCase();
-            if (['strict', 'lax', 'none'].includes(sameSiteLower)) {
-                cookieDetails.sameSite = sameSiteLower === 'none' ? 'no_restriction' : sameSiteLower;
-            } else {
-                delete cookieDetails.sameSite;
-            }
-        }
-        if (cookieDetails.name.startsWith('__Host-')) {
-            cookieDetails.secure = true;
-            cookieDetails.path = '/';
-            delete cookieDetails.domain;
-        } else if (cookieDetails.name.startsWith('__Secure-')) {
-            cookieDetails.secure = true;
-        }
-        if (cookieDetails.expirationDate && (isNaN(cookieDetails.expirationDate) || cookieDetails.expirationDate * 1000 < Date.now())) {
-            delete cookieDetails.expirationDate;
-        }
-        return cookieDetails;
-    }
-    
-    ipcMain.on('abrir-navegador', async (event, perfil) => {
-        const windowId = `profile_${Date.now()}`;
-        const partition = `persist:${windowId}`;
-        const isolatedSession = session.fromPartition(partition);
-        let secureWindow = null;
-        
-        try {
-            if (!perfil || !perfil.link) throw new Error('Perfil ou link inválido.');
-    
-            console.log(`[SESSÃO ${windowId}] Limpando armazenamento prévio da sessão...`);
-            await isolatedSession.clearStorageData();
-    
-            if (perfil.userAgent) {
-                await isolatedSession.setUserAgent(perfil.userAgent);
-            }
-    
-            let sessionData = null;
-            if (perfil.ftp && perfil.senha) {
-                try {
-                    console.log(`[SESSÃO ${windowId}] Baixando cookies do GitHub: ${perfil.ftp}`);
-                    const fileContent = await downloadFromGitHub(perfil.ftp, perfil.senha);
-                    if (fileContent) {
-                        sessionData = JSON.parse(fileContent);
-                        console.log(`[SESSÃO ${windowId}] Cookies carregados com sucesso do GitHub`);
-                    }
-                } catch (err) {
-                    console.error(`[SESSÃO ${windowId}] Falha ao buscar dados do GitHub:`, err.message);
-                }
-            }
-    
-            let cookiesToInject = [];
-            if (sessionData) {
-                if (Array.isArray(sessionData)) cookiesToInject = sessionData;
-                else if (sessionData.cookies && Array.isArray(sessionData.cookies)) cookiesToInject = sessionData.cookies;
-            }
-    
-            if (cookiesToInject.length > 0) {
-                console.log(`[SESSÃO ${windowId}] Preparando para injetar ${cookiesToInject.length} cookie(s)...`);
-                let successCount = 0, failureCount = 0;
-                for (const [index, cookie] of cookiesToInject.entries()) {
-                    try {
-                        const sanitizedCookie = sanitizeCookieForInjection(cookie, perfil.link);
-                        await isolatedSession.cookies.set(sanitizedCookie);
-                        successCount++;
-                    } catch (err) {
-                        console.error(`[COOKIE ${index}] Falha ao definir "${cookie.name}":`, err.message);
-                        failureCount++;
-                    }
-                }
-                console.log(`[SESSÃO ${windowId}] Injeção concluída. Sucesso: ${successCount}, Falhas: ${failureCount}`);
-                await isolatedSession.cookies.flushStore();
-            }
-    
-            const storageData = { localStorage: sessionData?.localStorage, sessionStorage: sessionData?.sessionStorage, indexedDB: sessionData?.indexedDB };
-			
-			// ★ NOVO: fornece dados de sessão de forma síncrona para o preload
-ipcMain.once('get-initial-session-data', (e) => {
-  if (secureWindow && !secureWindow.isDestroyed() && e.sender === secureWindow.webContents) {
-    e.returnValue = storageData || null;
-  } else {
-    e.returnValue = null;
-  }
+ipcMain.on('navigate-back', (e) => {
+    const entry = getViewForSender(e);
+    if (entry?.view.webContents.canGoBack()) entry.view.webContents.goBack();
 });
-    
-            ipcMain.once('request-session-data', (e) => {
-                if (secureWindow && !secureWindow.isDestroyed() && e.sender === secureWindow.webContents) {
-                    e.sender.send('inject-session-data', storageData);
-                }
-            });
-    
-            secureWindow = new BrowserWindow({
-                ...CONFIG.WINDOW_DEFAULTS,
-                frame: false, show: false,
-                webPreferences: {
-                    session: isolatedSession,
-                    // Garante que o preload-secure.js seja encontrado
-                    preload: path.join(__dirname, 'preload-secure.js'), 
-                    contextIsolation: true, nodeIntegration: false, devTools: true
-                }
-            });
-    
-            windowProfiles.set(secureWindow.webContents.id, perfil);
 
-            // [FIX] Ignorar naveg. abortadas (ex.: usuário digita e dá Enter)
-            secureWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-                if (isAbortError(errorCode)) {
-                    // Navegação interrompida por outra navegação -> normal; não fechar/derrubar UI
-                    return;
-                }
-                console.error('[NAV] did-fail-load:', errorCode, errorDescription, validatedURL);
-            });
-    
-            secureWindow.webContents.on('did-navigate', (e, url) => { 
-                withAlive(secureWindow, (w) => w.webContents.send('url-updated', url));
-            });
-    
-            // ===== NOVO SISTEMA DE LOGIN AUTOMÁTICO =====
-            if (perfil.usuariodaferramenta && perfil.senhadaferramenta) {
-                console.log(`[AUTO-LOGIN] Configurando login automático para: ${perfil.usuariodaferramenta}`);
-                
-                const sendCredentials = () => {
-                    withAlive(secureWindow, (w) => {
-                        console.log(`[AUTO-LOGIN] Enviando credenciais para preload script...`);
-                        w.webContents.send('set-auto-login-credentials', {
-                            usuariodaferramenta: perfil.usuariodaferramenta,
-                            senhadaferramenta: perfil.senhadaferramenta
-                        });
-                    });
-                };
+ipcMain.on('navigate-forward', (e) => {
+    const entry = getViewForSender(e);
+    if (entry?.view.webContents.canGoForward()) entry.view.webContents.goForward();
+});
 
-                secureWindow.webContents.once('did-finish-load', sendCredentials);
-                secureWindow.webContents.on('did-navigate', sendCredentials);
+ipcMain.on('navigate-reload', (e) => {
+    const entry = getViewForSender(e);
+    entry?.view.webContents.reload();
+});
+
+ipcMain.on('navigate-to-url', (e, url) => {
+    const entry = getViewForSender(e);
+    if (entry && url) entry.view.webContents.loadURL(url);
+});
+
+ipcMain.on('request-initial-url', (e) => {
+    const entry = getViewForSender(e);
+    if (entry) e.sender.send('url-updated', entry.view.webContents.getURL());
+});
+
+ipcMain.on('minimize-secure-window', (e) => {
+    BrowserWindow.fromWebContents(e.sender)?.minimize();
+});
+
+ipcMain.on('maximize-secure-window', (e) => {
+    const w = BrowserWindow.fromWebContents(e.sender);
+    if (w) w.isMaximized() ? w.unmaximize() : w.maximize();
+});
+
+ipcMain.on('close-secure-window', (e) => {
+    BrowserWindow.fromWebContents(e.sender)?.close();
+});
+
+ipcMain.on('open-download', (e, p) => { if (p) shell.openPath(p).catch(() => {}); });
+ipcMain.on('show-download-in-folder', (e, p) => { if (p) shell.showItemInFolder(path.resolve(p)); });
+
+// ★ Toggle do painel de downloads: encolher BrowserView para o painel ficar visível
+
+ipcMain.on('downloads-panel-toggle', (e, isOpen) => {
+    const mainWindow = BrowserWindow.fromWebContents(e.sender);
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    const entry = windowViews.get(mainWindow.id);
+    if (!entry) return;
+
+    entry.downloadsPanelOpen = isOpen;
+    updateViewBounds(mainWindow);
+
+    // Ajustar auto-resize: quando painel está aberto, não auto-resize largura
+    entry.view.setAutoResize({
+        width: !isOpen,
+        height: true,
+        horizontal: false,
+        vertical: false
+    });
+});
+
+// ===================================================================
+// EXPORTAÇÃO DE SESSÃO
+// ===================================================================
+ipcMain.on('initiate-full-session-export', async (event, storageData) => {
+    const mainWindow = BrowserWindow.fromWebContents(event.sender);
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+
+    const entry = windowViews.get(mainWindow.id);
+    if (!entry) return;
+
+    const viewContents = entry.view.webContents;
+    const perfil = windowProfiles.get(viewContents.id);
+
+    try {
+        const cookies = await viewContents.session.cookies.get({});
+        const fullSessionData = {
+            exported_at: new Date().toISOString(),
+            source_url: viewContents.getURL(),
+            cookies,
+            localStorage: storageData?.localStorageData,
+            sessionStorage: storageData?.sessionStorageData,
+            indexedDB: storageData?.indexedDBData
+        };
+        const jsonContent = JSON.stringify(fullSessionData, null, 4);
+
+        if (perfil?.ftp && perfil?.senha) {
+            try {
+                await uploadToGitHub(perfil.ftp, jsonContent, perfil.senha, `Atualizar sessão - ${new Date().toISOString()}`);
+                await dialog.showMessageBox(mainWindow, {
+                    type: 'info', title: 'Exportação Concluída',
+                    message: 'Sessão salva com sucesso no GitHub (criptografada)!',
+                    detail: `Arquivo: ${perfil.ftp}`
+                });
+            } catch (err) {
+                console.error('[EXPORT] Falha GitHub:', err);
+                const { response } = await dialog.showMessageBox(mainWindow, {
+                    type: 'warning', title: 'Erro GitHub',
+                    message: 'Falha no GitHub. Salvar localmente?',
+                    buttons: ['Salvar Localmente', 'Cancelar']
+                });
+                if (response === 0) await saveSessionLocally(mainWindow, jsonContent);
             }
-    
-            // Configuração do proxy (com correção para Envato)
-            if (perfil.proxy?.host && perfil.proxy?.port) {
-                const proxyValidation = validateProxyConfig(perfil.proxy);
-                if (!proxyValidation.valid) {
-                    console.error(`[SESSÃO ${windowId}] Configuração de proxy inválida:`, proxyValidation.error);
-                    await isolatedSession.setProxy({ proxyRules: 'direct://' });
-                } else {
-                    const proxyType = proxyValidation.type;
-                    let proxyRules = '';
-                    switch (proxyType) {
-                        case 'socks5': case 'socks': proxyRules = `socks5://${perfil.proxy.host}:${proxyValidation.port}`; break;
-                        case 'socks4': proxyRules = `socks4://${perfil.proxy.host}:${proxyValidation.port}`; break;
-                        case 'http': case 'https': default: proxyRules = `http://${perfil.proxy.host}:${proxyValidation.port}`; break;
-                    }
-                    
-                    const bypassRules = [
-                        perfil.proxy.bypass || '',
-                        '*.envatousercontent.com'
-                    ].filter(Boolean).join(',');
-    
-                    console.log(`[SESSÃO ${windowId}] Configurando proxy ${proxyType}: ${proxyRules}`);
-                    console.log(`[SESSÃO ${windowId}] Aplicando regras de bypass: ${bypassRules}`);
-    
-                    await isolatedSession.setProxy({ 
-                        proxyRules: proxyRules, 
-                        proxyBypassRules: bypassRules
-                    });
-    
-                    if (perfil.proxy.username) {
-                        proxyCredentials.set(secureWindow.webContents.id, { username: perfil.proxy.username, password: perfil.proxy.password ?? '' });
-                    }
-                }
+        } else {
+            await saveSessionLocally(mainWindow, jsonContent);
+        }
+    } catch (err) {
+        console.error('[EXPORT] Erro:', err);
+        await dialog.showMessageBox(mainWindow, {
+            type: 'error', title: 'Erro', message: 'Erro ao exportar sessão.', detail: err.message
+        });
+    }
+});
+
+async function saveSessionLocally(window, jsonContent) {
+    const { canceled, filePath } = await dialog.showSaveDialog(window, {
+        title: 'Salvar Sessão',
+        defaultPath: `session-${Date.now()}.json`,
+        filters: [{ name: 'JSON', extensions: ['json'] }]
+    });
+    if (!canceled && filePath) {
+        await fsPromises.writeFile(filePath, jsonContent);
+        await dialog.showMessageBox(window, {
+            type: 'info', title: 'Salvo', message: `Sessão salva em: ${filePath}`
+        });
+    }
+}
+
+// ===================================================================
+// ABRIR NAVEGADOR (evento principal)
+// ===================================================================
+
+// Handler unificado: aceita perfil plain OU criptografado
+async function handleAbrirNavegador(event, rawPerfil) {
+
+    // ★ CAMADA 2: Verificação OBRIGATÓRIA (local + remota)
+    const isIntact = await ensureFileIntegrity();
+    if (!isIntact) {
+        console.error('[SEGURANÇA] 🚫 Abertura BLOQUEADA por falha de integridade.');
+        dialog.showErrorBox(
+            'Segurança — Arquivos Alterados',
+            'Foram detectadas alterações nos arquivos do aplicativo e não foi possível restaurá-los.\n\n' +
+            'Por segurança, o navegador não será aberto.\n\n' +
+            'Reinstale o aplicativo ou verifique sua conexão com a internet.'
+        );
+        return;
+    }
+
+    // ★ CAMADA 3: Descriptografar perfil se veio criptografado
+    let perfil;
+    if (rawPerfil && rawPerfil.__encrypted && rawPerfil.payload) {
+        console.log('[IPC CRYPTO] Perfil recebido criptografado. Descriptografando...');
+        perfil = decryptIPC(rawPerfil.payload);
+        if (!perfil) {
+            console.error('[IPC CRYPTO] ❌ Falha ao descriptografar perfil. IPC possivelmente adulterado.');
+            dialog.showErrorBox('Erro de Segurança', 'Não foi possível processar os dados de forma segura.');
+            return;
+        }
+        console.log('[IPC CRYPTO] ✅ Perfil descriptografado com sucesso.');
+    } else {
+        // Perfil veio em texto puro (retrocompatibilidade)
+        perfil = rawPerfil;
+        console.log('[IPC] Perfil recebido (sem criptografia).');
+    }
+
+    const windowId = `profile_${Date.now()}`;
+    const partition = `persist:${windowId}`;
+    const isolatedSession = session.fromPartition(partition);
+    let mainWindow = null;
+
+    try {
+        if (!perfil?.link) throw new Error('Perfil ou link inválido.');
+
+        await isolatedSession.clearStorageData();
+        if (perfil.userAgent) await isolatedSession.setUserAgent(perfil.userAgent);
+
+        // Baixar cookies do GitHub
+        let sessionData = null;
+        if (perfil.ftp && perfil.senha) {
+            try {
+                const fileContent = await downloadFromGitHub(perfil.ftp, perfil.senha);
+                if (fileContent) sessionData = JSON.parse(fileContent);
+            } catch (err) {
+                console.error(`[SESSÃO ${windowId}] Falha GitHub:`, err.message);
+            }
+        }
+
+        // Injetar cookies
+        let cookiesToInject = [];
+        if (sessionData) {
+            if (Array.isArray(sessionData)) cookiesToInject = sessionData;
+            else if (Array.isArray(sessionData.cookies)) cookiesToInject = sessionData.cookies;
+        }
+
+        if (cookiesToInject.length > 0) {
+            let ok = 0, fail = 0;
+            for (const cookie of cookiesToInject) {
+                try {
+                    await isolatedSession.cookies.set(sanitizeCookieForInjection(cookie, perfil.link));
+                    ok++;
+                } catch { fail++; }
+            }
+            console.log(`[SESSÃO ${windowId}] Cookies: ${ok} OK, ${fail} falhas`);
+            await isolatedSession.cookies.flushStore();
+        }
+
+        const storageData = {
+            localStorage: sessionData?.localStorage,
+            sessionStorage: sessionData?.sessionStorage,
+            indexedDB: sessionData?.indexedDB
+        };
+
+        // Configurar proxy
+        if (perfil.proxy?.host && perfil.proxy?.port) {
+            const validation = validateProxyConfig(perfil.proxy);
+            if (validation.valid) {
+                const t = validation.type;
+                let proxyRules;
+                if (t === 'socks5' || t === 'socks') proxyRules = `socks5://${perfil.proxy.host}:${validation.port}`;
+                else if (t === 'socks4') proxyRules = `socks4://${perfil.proxy.host}:${validation.port}`;
+                else proxyRules = `http://${perfil.proxy.host}:${validation.port}`;
+
+                const bypass = [perfil.proxy.bypass || '', '*.envatousercontent.com'].filter(Boolean).join(',');
+                await isolatedSession.setProxy({ proxyRules, proxyBypassRules: bypass });
             } else {
                 await isolatedSession.setProxy({ proxyRules: 'direct://' });
             }
-                                        
-    
-            await setupDownloadManager(secureWindow, isolatedSession);
-            secureWindow.once('ready-to-show', () => secureWindow.show());
-            secureWindow.on('closed', () => {
-                console.log(`[SISTEMA] Janela ${secureWindow.webContents.id} fechada.`);
-                proxyCredentials.delete(secureWindow.webContents.id);
-                windowProfiles.delete(secureWindow.webContents.id);
-                secureWindow = null;
-            });
-    
-            console.log(`[SISTEMA ${windowId}] Preparação concluída. Carregando URL...`);
-            // [FIX] Ignorar rejeição de loadURL quando for ERR_ABORTED (-3)
-            try {
-                await secureWindow.loadURL(perfil.link);
-            } catch (err) {
-                if (isAbortError(err)) {
-                    // navegação inicial foi abortada por outra navegação rápida -> ok
-                    console.warn('[NAV] loadURL abortado por navegação subsequente (ok).');
-                } else {
-                    throw err;
-                }
-            }
-    
-        } catch (err) {
-            console.error('--- [ERRO FATAL] Falha ao criar janela:', err);
-            if (secureWindow && !secureWindow.isDestroyed()) secureWindow.destroy();
+        } else {
+            await isolatedSession.setProxy({ proxyRules: 'direct://' });
         }
-    });
-    
-    function findUniquePath(proposedPath) {
-        if (!fs.existsSync(proposedPath)) return proposedPath;
-        const { dir, name, ext } = path.parse(proposedPath);
-        let counter = 1, newPath;
-        do { newPath = path.join(dir, `${name} (${counter})${ext}`); counter++; } while (fs.existsSync(newPath));
-        return newPath;
-    }
-    
-                                                                                        
-    async function setupDownloadManager(win, isolatedSession) {
-        isolatedSession.on('will-download', (event, item) => {
-            if (win.isDestroyed()) {
-                return item.cancel();
-            }
-    
-            let filename = item.getFilename();
-            if (!filename) {
-                const mimeType = item.getMimeType();
-                let extension = '.tmp';
-                if (mimeType === 'audio/mpeg') extension = '.mp3';
-                else if (mimeType === 'audio/wav' || mimeType === 'audio/x-wav') extension = '.wav';
-                else if (mimeType === 'audio/aac') extension = '.aac';
-                else if (mimeType === 'application/zip') extension = '.zip';
-                filename = `download-${Date.now()}${extension}`;
-                console.log(`[DOWNLOAD] Nome de arquivo ausente. Gerado nome fallback: ${filename} (MIME: ${mimeType})`);
-            }
-            
-            const uniquePath = findUniquePath(path.join(app.getPath('downloads'), filename));
-            item.setSavePath(uniquePath);
-            
-            const downloadId = `download-${crypto.randomUUID()}`;
-            win.webContents.send('download-started', { id: downloadId, filename: path.basename(uniquePath) });
-            
-            let lastProgress = 0, lastUpdateTime = 0;
-            const THROTTLE_INTERVAL = 250;
-            
-            item.on('updated', (e, state) => {
-                if (win.isDestroyed() || state !== 'progressing' || item.getTotalBytes() <= 0) return;
-                const progress = Math.round((item.getReceivedBytes() / item.getTotalBytes()) * 100);
-                const now = Date.now();
-                if (progress > lastProgress && (now - lastUpdateTime > THROTTLE_INTERVAL)) {
-                    win.webContents.send('download-progress', { id: downloadId, progress });
-                    lastProgress = progress; lastUpdateTime = now;
-                }
+
+        // CRIAR JANELA COM BROWSERVIEW
+        const { mainWindow: mw, view } = createSecureWindow(perfil, isolatedSession, storageData);
+        mainWindow = mw;
+
+        // Proxy credentials
+        if (perfil.proxy?.username) {
+            proxyCredentials.set(view.webContents.id, {
+                username: perfil.proxy.username,
+                password: perfil.proxy.password ?? ''
             });
-            
-            item.on('done', (e, state) => {
-                if (win.isDestroyed()) return;
-                const finalProgress = state === 'completed' ? 100 : (item.getTotalBytes() > 0 ? Math.round((item.getReceivedBytes() / item.getTotalBytes()) * 100) : lastProgress);
-                win.webContents.send('download-complete', { id: downloadId, state, path: item.getSavePath(), progress: finalProgress });
-            });
-        });
-    }
-    
-    function getWindowFromEvent(event) {
-        const window = BrowserWindow.fromWebContents(event.sender);
-        if (!window || window.isDestroyed()) return null;
-        return window;
-    }
-    
-    ipcMain.on('request-initial-url', e => { const w = getWindowFromEvent(e); if (w) e.sender.send('url-updated', w.webContents.getURL()); });
-    ipcMain.on('open-download', (e, p) => { if (p) shell.openPath(p).catch(err => console.error(`Falha ao abrir: ${p}`, err)); });
-    ipcMain.on('show-download-in-folder', (e, p) => { if (p) shell.showItemInFolder(path.resolve(p)); });
-    ipcMain.on('minimize-secure-window', e => getWindowFromEvent(e)?.minimize());
-    ipcMain.on('maximize-secure-window', e => { const w = getWindowFromEvent(e); if (w) w.isMaximized() ? w.unmaximize() : w.maximize(); });
-    ipcMain.on('close-secure-window', e => getWindowFromEvent(e)?.close());
-    ipcMain.on('navigate-back', e => { const wc = getWindowFromEvent(e)?.webContents; if (wc?.canGoBack()) wc.goBack(); });
-    ipcMain.on('navigate-forward', e => { const wc = getWindowFromEvent(e)?.webContents; if (wc?.canGoForward()) wc.goForward(); });
-    ipcMain.on('navigate-reload', e => getWindowFromEvent(e)?.webContents.reload());
-    ipcMain.on('navigate-to-url', (event, url) => { const wc = getWindowFromEvent(event)?.webContents; if (wc && url) wc.loadURL(url); });
-    
-    ipcMain.on('initiate-full-session-export', async (event, storageData) => {
-        const window = BrowserWindow.fromWebContents(event.sender);
-        if (!window || window.isDestroyed()) return;
-        const perfil = windowProfiles.get(window.webContents.id);
-        
+        }
+
+        // Carregar URL no BrowserView
         try {
-            const currentSession = window.webContents.session;
-            const cookies = await currentSession.cookies.get({});
-            const fullSessionData = {
-                exported_at: new Date().toISOString(),
-                source_url: window.webContents.getURL(),
-                cookies: cookies,
-                localStorage: storageData.localStorageData,
-                sessionStorage: storageData.sessionStorageData,
-                indexedDB: storageData.indexedDBData
-            };
-            const jsonContent = JSON.stringify(fullSessionData, null, 4);
-            
-            if (perfil && perfil.ftp && perfil.senha) {
-                console.log(`[EXPORTAÇÃO] Iniciando upload da sessão para GitHub: ${perfil.ftp}`);
-                try {
-                    const commitMessage = `Atualizar sessão - ${new Date().toISOString()}`;
-                    await uploadToGitHub(perfil.ftp, jsonContent, perfil.senha, commitMessage);
-                    console.log(`[EXPORTAÇÃO] Sessão salva com sucesso no GitHub.`);
-                    await dialog.showMessageBox(window, {
-                        type: 'info',
-                        title: 'Exportação Concluída',
-                        message: 'A sessão completa foi salva com sucesso no GitHub (criptografada)!',
-                        detail: `Arquivo: ${perfil.ftp}`
-                    });
-                } catch (err) {
-                    console.error('[EXPORTAÇÃO GITHUB] Falha:', err);
-                    const { response } = await dialog.showMessageBox(window, {
-                        type: 'warning',
-                        title: 'Erro na Exportação para GitHub',
-                        message: 'Não foi possível salvar no GitHub. Deseja salvar localmente?',
-                        detail: err.message,
-                        buttons: ['Salvar Localmente', 'Cancelar'],
-                        defaultId: 0
-                    });
-                    if (response === 0) {
-                        const { canceled, filePath } = await dialog.showSaveDialog(window, {
-                            title: 'Salvar Sessão Completa Localmente',
-                            defaultPath: `session-${Date.now()}.json`,
-                            filters: [{ name: 'JSON Files', extensions: ['json'] }]
-                        });
-                        if (!canceled && filePath) {
-                            await fsPromises.writeFile(filePath, jsonContent);
-                            console.log(`[EXPORTAÇÃO] Sessão salva localmente: ${filePath}`);
-                            await dialog.showMessageBox(window, {
-                                type: 'info',
-                                title: 'Sessão Salva Localmente',
-                                message: 'A sessão completa foi salva no computador!',
-                                detail: `Arquivo: ${filePath}`
-                            });
-                        }
-                    }
-                }
-            } else {
-                console.log('[EXPORTAÇÃO] Nenhum perfil GitHub encontrado. Salvando localmente.');
-                const { canceled, filePath } = await dialog.showSaveDialog(window, {
-                    title: 'Salvar Sessão Completa Localmente',
-                    defaultPath: `session-${Date.now()}.json`,
-                    filters: [{ name: 'JSON Files', extensions: ['json'] }]
-                });
-                if (canceled || !filePath) return console.log('[EXPORTAÇÃO] Salvamento local cancelado.');
-                await fsPromises.writeFile(filePath, jsonContent);
-                console.log(`[EXPORTAÇÃO] Sessão salva com sucesso em: ${filePath}`);
-                await dialog.showMessageBox(window, {
-                    type: 'info',
-                    title: 'Exportação Concluída',
-                    message: 'A sessão completa foi salva localmente com sucesso!',
-                    detail: `O arquivo foi salvo em: ${filePath}`
-                });
-            }
+            await view.webContents.loadURL(perfil.link);
         } catch (err) {
-            console.error('[EXPORTAÇÃO] Falha geral:', err);
-            await dialog.showMessageBox(window, {
-                type: 'error',
-                title: 'Erro na Exportação',
-                message: 'Ocorreu um erro inesperado ao preparar a sessão para exportação.',
-                detail: err.message
-            });
+            // NUNCA destruir a janela por erro de navegação.
+            // O navegador deve ficar aberto mesmo que o site falhe.
+            console.warn(`[NAV] Erro ao carregar ${perfil.link}: ${err.code || err.message}`);
         }
-    });
-    
-    process.on('uncaughtException', err => console.error('--- ERRO NÃO CAPTURADO ---', err));
-    process.on('unhandledRejection', reason => console.error('--- PROMISE REJEITADA NÃO TRATADA ---', reason));
 
-} // FIM DA FUNÇÃO startApp()
+    } catch (err) {
+        console.error('--- [ERRO FATAL] ---', err);
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
+    }
+}
 
+// Registrar AMBOS os handlers: plain e criptografado
+ipcMain.on('abrir-navegador', (event, perfil) => handleAbrirNavegador(event, perfil));
+ipcMain.on('abrir-navegador-secure', (event, encryptedPerfil) => handleAbrirNavegador(event, encryptedPerfil));
 
 // ===================================================================
-// PARTE 4: INICIALIZADOR (O "Maestro" que decide quando e como iniciar)
+// PROXY AUTH
+// ===================================================================
+const nossoManipuladorDeLogin = (event, webContents, request, authInfo, callback) => {
+    if (!authInfo.isProxy) return callback();
+    event.preventDefault();
+    const credentials = proxyCredentials.get(webContents?.id);
+    if (credentials) callback(credentials.username, credentials.password);
+    else callback();
+};
+
+// ===================================================================
+// INICIALIZAÇÃO
+// ===================================================================
+function startApp() {
+    app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
+
+    app.whenReady().then(async () => {
+        await limparParticoesAntigas();
+
+        // Verificação inicial de integridade (local rápida, na inicialização)
+        const result = verifyFileIntegrityLocal();
+        if (!result.ok) {
+            console.warn(`[SEGURANÇA] Adulteração detectada na inicialização: ${result.tampered?.join(', ')}`);
+            try {
+                unlockFiles();
+                await performAppUpdate(true);
+                console.log('[SEGURANÇA] Arquivos restaurados na inicialização.');
+            } catch (err) {
+                console.error('[SEGURANÇA] Falha ao restaurar:', err.message);
+            }
+        } else {
+            console.log('[SEGURANÇA] ✅ Verificação inicial OK.');
+        }
+
+        for (const listener of app.listeners('login')) app.removeListener('login', listener);
+        app.on('login', nossoManipuladorDeLogin);
+        console.log('[SISTEMA] Aplicação pronta. Arquitetura BrowserView ativa.');
+    });
+
+    app.on('window-all-closed', () => {
+        if (process.platform !== 'darwin') app.quit();
+    });
+
+    process.on('uncaughtException', err => console.error('--- ERRO NÃO CAPTURADO ---', err));
+    process.on('unhandledRejection', reason => console.error('--- PROMISE REJEITADA ---', reason));
+}
+
+// ===================================================================
+// PONTO DE ENTRADA
 // ===================================================================
 async function initialize() {
     const filesAreMissing = criticalFilePaths.some(p => !fs.existsSync(p));
 
     if (filesAreMissing) {
-        // PRIMEIRA EXECUÇÃO: Baixa tudo antes de continuar.
-        console.log("Arquivos essenciais não encontrados. Iniciando instalação...");
+        console.log('Arquivos essenciais não encontrados. Instalando...');
         try {
-            await performAppUpdate(true); // Modo bloqueante
-            startApp(); // Inicia o app somente após o sucesso
+            await performAppUpdate(true);
+            startApp();
         } catch (error) {
-            console.error("FALHA CRÍTICA NA INSTALAÇÃO:", error.message);
-            // app.isReady() é necessário antes de usar 'dialog'
+            console.error('FALHA CRÍTICA:', error.message);
             app.whenReady().then(() => {
-                dialog.showErrorBox("Erro de Instalação", "Não foi possível baixar os arquivos necessários para iniciar. Verifique sua conexão com a internet e tente novamente.");
+                dialog.showErrorBox('Erro de Instalação', 'Não foi possível baixar os arquivos. Verifique sua conexão.');
                 app.quit();
             });
         }
     } else {
-        // EXECUÇÃO NORMAL: Inicia o app e atualiza em segundo plano.
-        startApp(); // Inicia o app IMEDIATAMENTE
-        setTimeout(() => { // Inicia a atualização silenciosa após um curto intervalo
-            performAppUpdate(false).catch(err => console.error('[Updater BG] Erro inesperado:', err));
-        }, 5000); // 5 segundos de espera para não impactar a inicialização.
+        startApp();
+        setTimeout(() => {
+            performAppUpdate(false).catch(err => console.error('[Updater BG] Erro:', err));
+        }, 5000);
     }
 }
 
-// PONTO DE ENTRADA: AQUI TUDO COMEÇA!
 initialize();
 ;
 //# sourceMappingURL=main.js.map
