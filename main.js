@@ -12278,21 +12278,115 @@ function validateProxyConfig(proxy) {
 }
 
 function sanitizeCookieForInjection(cookie, defaultUrl) {
-    const c = { ...cookie };
-    if (!c.url) {
-        const host = cookie.domain ? (cookie.domain.startsWith('.') ? cookie.domain.substring(1) : cookie.domain) : new URL(defaultUrl).hostname;
-        c.url = `https://${host}${c.path || '/'}`;
+    const c = {};
+
+    // Nome e valor são obrigatórios
+    if (!cookie.name || cookie.value === undefined || cookie.value === null) return null;
+    c.name = String(cookie.name);
+    c.value = String(cookie.value);
+
+    // Construir URL a partir do domain
+    const host = cookie.domain
+        ? (cookie.domain.startsWith('.') ? cookie.domain.substring(1) : cookie.domain)
+        : new URL(defaultUrl).hostname;
+
+    // Sempre usar HTTPS para evitar problemas com cookies secure
+    c.url = `https://${host}${cookie.path || '/'}`;
+
+    // Domain — preservar se veio no cookie original
+    if (cookie.domain) {
+        c.domain = cookie.domain;
     }
-    if (c.secure && c.url.startsWith('http://')) c.url = c.url.replace('http://', 'https://');
-    if (c.sameSite) {
-        const s = c.sameSite.toLowerCase();
-        if (['strict', 'lax', 'none'].includes(s)) c.sameSite = s === 'none' ? 'no_restriction' : s;
-        else delete c.sameSite;
+
+    // Path
+    if (cookie.path) {
+        c.path = cookie.path;
     }
-    if (c.name.startsWith('__Host-')) { c.secure = true; c.path = '/'; delete c.domain; }
-    else if (c.name.startsWith('__Secure-')) c.secure = true;
-    if (c.expirationDate && (isNaN(c.expirationDate) || c.expirationDate * 1000 < Date.now())) delete c.expirationDate;
+
+    // Secure — forçar true para HTTPS (a maioria dos sites modernos precisa)
+    c.secure = cookie.secure !== false;
+
+    // HttpOnly
+    if (cookie.httpOnly !== undefined) {
+        c.httpOnly = !!cookie.httpOnly;
+    }
+
+    // SameSite — tratamento rigoroso
+    if (cookie.sameSite) {
+        const s = String(cookie.sameSite).toLowerCase();
+        if (s === 'strict') c.sameSite = 'strict';
+        else if (s === 'lax') c.sameSite = 'lax';
+        else if (s === 'none' || s === 'no_restriction' || s === 'unspecified') {
+            c.sameSite = 'no_restriction';
+            c.secure = true; // Chromium EXIGE secure com sameSite=none
+        }
+        // Se não for nenhum valor conhecido, não definir (usa default do browser)
+    } else {
+        // Sem sameSite definido → usar 'lax' (padrão seguro do Chromium)
+        c.sameSite = 'lax';
+    }
+
+    // Cookies especiais com prefixo
+    if (c.name.startsWith('__Host-')) {
+        c.secure = true;
+        c.path = '/';
+        delete c.domain; // __Host- não pode ter domain
+    } else if (c.name.startsWith('__Secure-')) {
+        c.secure = true;
+    }
+
+    // ExpirationDate — tratamento cuidadoso
+    if (cookie.expirationDate) {
+        const exp = Number(cookie.expirationDate);
+        if (!isNaN(exp) && exp > 0) {
+            // expirationDate em segundos (epoch)
+            const expMs = exp > 1e12 ? exp : exp * 1000; // detectar se é ms ou s
+            if (expMs > Date.now()) {
+                // Cookie ainda válido — preservar expiração
+                c.expirationDate = exp > 1e12 ? exp / 1000 : exp;
+            } else {
+                // Cookie EXPIRADO — pular completamente (não injetar)
+                return null;
+            }
+        }
+        // Se não é número válido, omitir (vira session cookie)
+    }
+
     return c;
+}
+
+/**
+ * Deduplica cookies — se houver 2 com mesmo nome+domain+path, mantém o último.
+ * Também remove cookies expirados e inválidos.
+ */
+function prepareCookiesForInjection(cookies, defaultUrl) {
+    const seen = new Map(); // chave: "name|domain|path"
+    const result = [];
+
+    for (const cookie of cookies) {
+        const sanitized = sanitizeCookieForInjection(cookie, defaultUrl);
+        if (!sanitized) continue; // Cookie inválido ou expirado — pular
+
+        // Deduplicar por nome+domain+path
+        const key = `${sanitized.name}|${sanitized.domain || ''}|${sanitized.path || '/'}`;
+        seen.set(key, sanitized); // Último vence
+    }
+
+    // Ordenar: cookies de autenticação por último (para não serem sobrescritos)
+    const authPatterns = ['session', 'token', 'auth', 'sid', 'csrf', 'login', 'jwt'];
+    const entries = Array.from(seen.values());
+    const normal = [];
+    const auth = [];
+
+    for (const c of entries) {
+        const nameLower = c.name.toLowerCase();
+        const isAuth = authPatterns.some(p => nameLower.includes(p));
+        if (isAuth) auth.push(c);
+        else normal.push(c);
+    }
+
+    // Normal primeiro, auth por último (para garantir que não são sobrescritos)
+    return [...normal, ...auth];
 }
 
 function findUniquePath(proposedPath) {
@@ -12948,14 +13042,29 @@ async function handleAbrirNavegador(event, rawPerfil) {
         }
 
         if (cookiesToInject.length > 0) {
+            // Preparar cookies: deduplica, remove expirados, ordena auth por último
+            const prepared = prepareCookiesForInjection(cookiesToInject, perfil.link);
+            const skipped = cookiesToInject.length - prepared.length;
+
+            console.log(`[SESSÃO ${windowId}] Cookies: ${cookiesToInject.length} total, ${prepared.length} válidos, ${skipped} removidos (expirados/duplicados)`);
+
             let ok = 0, fail = 0;
-            for (const cookie of cookiesToInject) {
+            const failedNames = [];
+            for (const cookie of prepared) {
                 try {
-                    await isolatedSession.cookies.set(sanitizeCookieForInjection(cookie, perfil.link));
+                    await isolatedSession.cookies.set(cookie);
                     ok++;
-                } catch { fail++; }
+                } catch (err) {
+                    fail++;
+                    if (fail <= 5) failedNames.push(`${cookie.name}: ${err.message}`);
+                }
             }
-            console.log(`[SESSÃO ${windowId}] Cookies: ${ok} OK, ${fail} falhas`);
+
+            console.log(`[SESSÃO ${windowId}] Injeção: ${ok} OK, ${fail} falhas`);
+            if (failedNames.length > 0) {
+                console.warn(`[SESSÃO ${windowId}] Primeiras falhas:`, failedNames.join(' | '));
+            }
+
             await isolatedSession.cookies.flushStore();
         }
 
