@@ -336,8 +336,14 @@ const { ipcRenderer } = require('electron');
 
 // Anexa a função diretamente ao objeto 'window'.
 // Isto SÓ funciona se 'contextIsolation' for 'false'.
+// ✅ NOVO
 window.abrirNavegador = (perfil) => {
-  ipcRenderer.send('abrir-navegador', perfil);
+  const encrypted = encryptPerfil(perfil);
+  if (encrypted) {
+    _ipc.send('abrir-navegador-secure', { __encrypted: true, payload: encrypted });
+  } else {
+    _ipc.send('abrir-navegador', perfil); // fallback
+  }
 };
 
 //# sourceMappingURL=preload.js.map
