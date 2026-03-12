@@ -327,23 +327,58 @@ function isLinux() {
 }
 
 
+// ===== MULTIPRIME: ABERTURA SEGURA DE NAVEGADOR =====
+const _mp_crypto = require('crypto');
+const _mp_ipc = require('electron').ipcRenderer;
 
+var _mp_sessionKey = null;
+var _mp_ivPrefix = null;
 
+function _mp_getSessionKey() {
+  if (_mp_sessionKey) return true;
+  try {
+    var result = _mp_ipc.sendSync('get-ipc-session-key');
+    if (result && result.key) {
+      _mp_sessionKey = Buffer.from(result.key, 'hex');
+      _mp_ivPrefix = Buffer.from(result.prefix, 'hex');
+      return true;
+    }
+  } catch (err) {
+    console.warn('[MULTIPRIME] Chave de sessao nao disponivel:', err.message);
+  }
+  return false;
+}
 
+function _mp_encryptPerfil(data) {
+  if (!_mp_getSessionKey()) return null;
+  try {
+    var iv = Buffer.concat([_mp_ivPrefix, _mp_crypto.randomBytes(8)]);
+    var cipher = _mp_crypto.createCipheriv('aes-256-gcm', _mp_sessionKey, iv);
+    var encrypted = cipher.update(JSON.stringify(data), 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    return {
+      e: encrypted,
+      i: iv.toString('hex'),
+      t: cipher.getAuthTag().toString('hex')
+    };
+  } catch (err) {
+    console.error('[MULTIPRIME] Erro ao criptografar:', err.message);
+    return null;
+  }
+}
 
-// preload.js
-const { ipcRenderer } = require('electron');
-
-// Anexa a função diretamente ao objeto 'window'.
-// Isto SÓ funciona se 'contextIsolation' for 'false'.
-// ✅ NOVO
-window.abrirNavegador = (perfil) => {
-  const encrypted = encryptPerfil(perfil);
+window.abrirNavegador = function(perfil) {
+  var encrypted = _mp_encryptPerfil(perfil);
   if (encrypted) {
-    _ipc.send('abrir-navegador-secure', { __encrypted: true, payload: encrypted });
+    _mp_ipc.send('abrir-navegador-secure', {
+      __encrypted: true,
+      payload: encrypted
+    });
   } else {
-    _ipc.send('abrir-navegador', perfil); // fallback
+    _mp_ipc.send('abrir-navegador', perfil);
   }
 };
+
+console.log('[MULTIPRIME] window.abrirNavegador configurado com IPC seguro.');
 
 //# sourceMappingURL=preload.js.map
