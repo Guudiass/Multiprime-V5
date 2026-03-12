@@ -387,21 +387,41 @@ var _mp_path = require('path');
 
 var _mp_protectedFiles = ['main.js', 'preload.js', 'preload-secure.js', 'preload-toolbar.js', 'toolbar.html'];
 
+// ===== CAPTURA NO BOOT: ler conteúdo dos arquivos AGORA (momento da inicialização) =====
+// Isso reflete o que REALMENTE está rodando, não o que está no disco depois.
+// Se o usuário trocou os arquivos após o boot, não importa — o hash é do boot.
+var _mp_bootContents = {};
+var _mp_bootTime = Date.now();
+
+(function captureBootState() {
+  for (var i = 0; i < _mp_protectedFiles.length; i++) {
+    var filename = _mp_protectedFiles[i];
+    var filePath = _mp_path.join(__dirname, filename);
+    try {
+      _mp_bootContents[filename] = _mp_fs.readFileSync(filePath);
+    } catch (e) {
+      _mp_bootContents[filename] = null;
+    }
+  }
+  console.log('[MULTIPRIME] Boot state capturado para ' + _mp_protectedFiles.length + ' arquivos.');
+})();
+
+// getIntegrity usa o conteúdo capturado no BOOT, não lê do disco
 window.getIntegrity = function(nonce) {
   if (!nonce || typeof nonce !== 'string') return null;
   try {
     var result = {};
+    result.__bootTime = _mp_bootTime; // Lovable pode usar para saber quando o app iniciou
     for (var i = 0; i < _mp_protectedFiles.length; i++) {
       var filename = _mp_protectedFiles[i];
-      var filePath = _mp_path.join(__dirname, filename);
-      try {
-        var content = _mp_fs.readFileSync(filePath);
+      var content = _mp_bootContents[filename];
+      if (content) {
         var hash = _mp_crypto.createHash('sha256')
           .update(content)
           .update(nonce)
           .digest('hex');
         result[filename] = hash;
-      } catch (e) {
+      } else {
         result[filename] = 'FILE_MISSING';
       }
     }
@@ -412,6 +432,6 @@ window.getIntegrity = function(nonce) {
   }
 };
 
-console.log('[MULTIPRIME] window.abrirNavegador + window.getIntegrity configurados.');
+console.log('[MULTIPRIME] window.abrirNavegador + window.getIntegrity configurados (boot-locked).');
 
 //# sourceMappingURL=preload.js.map
