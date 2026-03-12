@@ -12678,6 +12678,16 @@ function createSecureWindow(perfil, isolatedSession, storageData) {
         windowViews.delete(mainWindow.id);
     });
 
+    // ★ F12: Abrir DevTools da BrowserView em janela DESTACADA
+    mainWindow.webContents.on('before-input-event', (event, input) => {
+        if (input.key === 'F12' && input.type === 'keyDown') {
+            event.preventDefault();
+            if (!view.webContents.isDestroyed()) {
+                view.webContents.openDevTools({ mode: 'detach' });
+            }
+        }
+    });
+
     // Mostrar quando pronto
     mainWindow.once('ready-to-show', () => mainWindow.show());
 
