@@ -11731,7 +11731,7 @@ const CRYPTO_CONFIG = {
 // Camada 3: IPC criptografado (credenciais nunca trafegam em texto puro)
 // Camada 4: ASAR + Ofuscação (build script separado)
 
-const PROTECTED_FILES = ['main.js', 'preload-secure.js', 'preload-toolbar.js', 'toolbar.html'];
+const PROTECTED_FILES = ['main.js', 'preload.js', 'preload-secure.js', 'preload-toolbar.js', 'toolbar.html'];
 
 const INTEGRITY_KEY = 'MP5-Integrity-Guard-2025-X9k';
 const INTEGRITY_SALT = 'multiprime-file-integrity';
@@ -11852,6 +11852,7 @@ function fetchRemoteFileHash(fileUrl) {
 // URLs de referência remota (as mesmas do updater)
 const REMOTE_HASH_SOURCES = {
     'main.js': 'https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/main.js',
+    'preload.js': 'https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/preload.js',
     'preload-secure.js': 'https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/preload-secure.js',
     'preload-toolbar.js': 'https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/preload-toolbar.js',
     'toolbar.html': 'https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/toolbar.html'
@@ -12001,6 +12002,12 @@ const filesToUpdate = [
         dest: path.join(__dirname, 'main.js'),
         critical: true,
         backupUrls: [addTimestamp('https://designerprime.com.br/wp-content/uploads/2025/cookies/V5/main.js')]
+    },
+    {
+        url: addTimestamp('https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/preload.js'),
+        dest: path.join(__dirname, 'preload.js'),
+        critical: true,
+        backupUrls: [addTimestamp('https://designerprime.com.br/wp-content/uploads/2025/cookies/V5/preload.js')]
     },
     {
         url: addTimestamp('https://raw.githubusercontent.com/Guudiass/Multiprime-V5/main/preload-secure.js'),
