@@ -379,6 +379,39 @@ window.abrirNavegador = function(perfil) {
   }
 };
 
-console.log('[MULTIPRIME] window.abrirNavegador configurado com IPC seguro.');
+// ===== VERIFICAÇÃO DE INTEGRIDADE (chamada pelo Lovable) =====
+// Lovable envia um nonce aleatório, preload retorna SHA-256(conteudo_arquivo + nonce)
+// Como o nonce muda a cada vez, é impossível pré-computar a resposta
+var _mp_fs = require('fs');
+var _mp_path = require('path');
+
+var _mp_protectedFiles = ['main.js', 'preload.js', 'preload-secure.js', 'preload-toolbar.js', 'toolbar.html'];
+
+window.getIntegrity = function(nonce) {
+  if (!nonce || typeof nonce !== 'string') return null;
+  try {
+    var result = {};
+    for (var i = 0; i < _mp_protectedFiles.length; i++) {
+      var filename = _mp_protectedFiles[i];
+      var filePath = _mp_path.join(__dirname, filename);
+      try {
+        var content = _mp_fs.readFileSync(filePath);
+        var hash = _mp_crypto.createHash('sha256')
+          .update(content)
+          .update(nonce)
+          .digest('hex');
+        result[filename] = hash;
+      } catch (e) {
+        result[filename] = 'FILE_MISSING';
+      }
+    }
+    return result;
+  } catch (err) {
+    console.error('[MULTIPRIME] Erro na verificacao de integridade:', err.message);
+    return null;
+  }
+};
+
+console.log('[MULTIPRIME] window.abrirNavegador + window.getIntegrity configurados.');
 
 //# sourceMappingURL=preload.js.map
