@@ -12476,20 +12476,34 @@ function createSecureWindow(perfil, isolatedSession, storageData) {
     view.setBounds(getViewBounds(mainWindow, false));
     view.setAutoResize({ width: true, height: true, horizontal: false, vertical: false });
 
-    // Recalcular bounds ao redimensionar
+    // Recalcular bounds ao redimensionar + forçar recálculo de viewport
+    const forceViewportRecalc = () => {
+        if (!view.webContents.isDestroyed()) {
+            view.webContents.executeJavaScript('window.dispatchEvent(new Event("resize"))').catch(() => {});
+        }
+    };
+
     mainWindow.on('resize', () => {
-        if (!mainWindow.isDestroyed()) updateViewBounds(mainWindow);
+        if (!mainWindow.isDestroyed()) {
+            updateViewBounds(mainWindow);
+            setTimeout(forceViewportRecalc, 100);
+        }
     });
 
-    // Maximizar/restaurar também precisa recalcular
     mainWindow.on('maximize', () => {
         setTimeout(() => {
-            if (!mainWindow.isDestroyed()) updateViewBounds(mainWindow);
+            if (!mainWindow.isDestroyed()) {
+                updateViewBounds(mainWindow);
+                setTimeout(forceViewportRecalc, 100);
+            }
         }, 50);
     });
     mainWindow.on('unmaximize', () => {
         setTimeout(() => {
-            if (!mainWindow.isDestroyed()) updateViewBounds(mainWindow);
+            if (!mainWindow.isDestroyed()) {
+                updateViewBounds(mainWindow);
+                setTimeout(forceViewportRecalc, 100);
+            }
         }, 50);
     });
 
@@ -12512,6 +12526,12 @@ function createSecureWindow(perfil, isolatedSession, storageData) {
     });
     view.webContents.on('did-stop-loading', () => {
         withAlive(mainWindow, (w) => w.webContents.send('page-loading', false));
+    });
+
+    // ★ FIX VIEWPORT: Forçar recálculo de layout após carregar
+    view.webContents.on('did-finish-load', () => {
+        setTimeout(forceViewportRecalc, 300);
+        setTimeout(forceViewportRecalc, 1000);
     });
     view.webContents.on('did-start-navigation', (e, url, isInPlace, isMainFrame) => {
         if (isMainFrame) {
