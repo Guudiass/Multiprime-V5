@@ -44,22 +44,42 @@ const { ipcRenderer, webFrame } = require('electron');
     }
 })();
 
-// ===== ANTI-DETECÇÃO =====
-Object.defineProperty(navigator, 'webdriver', { get: () => false });
+// ===== ANTI-DETECÇÃO (injetado no MAIN WORLD via webFrame) =====
+// Com contextIsolation: true, Object.defineProperty no preload NÃO afeta o site.
+// Precisa injetar no main world para o site enxergar as mudanças.
+(() => {
+    try {
+        webFrame.executeJavaScript(`
+            (function() {
+                try {
+                    Object.defineProperty(navigator, 'webdriver', { get: () => false });
 
-Object.defineProperty(navigator, 'plugins', {
-    get: () => [
-        { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
-        { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
-        { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
-    ],
-});
+                    Object.defineProperty(navigator, 'plugins', {
+                        get: () => [
+                            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+                            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+                            { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
+                        ],
+                    });
 
-const originalQuery = window.navigator.permissions.query;
-window.navigator.permissions.query = (parameters) =>
-    parameters.name === 'notifications'
-        ? Promise.resolve({ state: Notification.permission })
-        : originalQuery(parameters);
+                    var origQuery = navigator.permissions.query.bind(navigator.permissions);
+                    navigator.permissions.query = function(params) {
+                        if (params.name === 'notifications') {
+                            return Promise.resolve({ state: Notification.permission });
+                        }
+                        return origQuery(params);
+                    };
+
+                    console.log('[ANTI-DETECT] Camuflagem aplicada no main world');
+                } catch (e) {
+                    console.error('[ANTI-DETECT] Erro:', e);
+                }
+            })();
+        `, true);
+    } catch (e) {
+        console.error('[ANTI-DETECT] Erro fatal:', e);
+    }
+})();
 
 // ===== AUTO-LOGIN =====
 let autoLoginCredentials = null;
