@@ -13174,17 +13174,33 @@ async function handleAbrirNavegador(event, rawPerfil) {
             const validation = validateProxyConfig(perfil.proxy);
             if (validation.valid) {
                 const t = validation.type;
+                const hasAuth = !!(perfil.proxy.username);
+                const authStr = hasAuth ? `${encodeURIComponent(perfil.proxy.username)}:${encodeURIComponent(perfil.proxy.password ?? '')}@` : '';
                 let proxyRules;
-                if (t === 'socks5' || t === 'socks') proxyRules = `socks5://${perfil.proxy.host}:${validation.port}`;
-                else if (t === 'socks4') proxyRules = `socks4://${perfil.proxy.host}:${validation.port}`;
-                else proxyRules = `http://${perfil.proxy.host}:${validation.port}`;
+
+                if (t === 'socks5' || t === 'socks') {
+                    // SOCKS5: credenciais VÃO na URL (evento login NÃO funciona para SOCKS)
+                    proxyRules = `socks5://${authStr}${perfil.proxy.host}:${validation.port}`;
+                } else if (t === 'socks4') {
+                    proxyRules = `socks4://${perfil.proxy.host}:${validation.port}`;
+                } else {
+                    // HTTP/HTTPS: credenciais podem ir na URL OU via evento login
+                    // Colocar na URL é mais confiável
+                    proxyRules = `http://${authStr}${perfil.proxy.host}:${validation.port}`;
+                }
 
                 const bypass = [perfil.proxy.bypass || '', '*.envatousercontent.com'].filter(Boolean).join(',');
                 await isolatedSession.setProxy({ proxyRules, proxyBypassRules: bypass });
+
+                // Log sem mostrar senha
+                const safeRules = proxyRules.replace(/:([^@]+)@/, ':***@');
+                console.log(`[PROXY] Tipo: ${t} | Rules: ${safeRules} | Auth: ${hasAuth ? 'SIM (embutido na URL)' : 'NÃO'}`);
             } else {
+                console.warn(`[PROXY] Configuração inválida: ${validation.error}. Usando direto.`);
                 await isolatedSession.setProxy({ proxyRules: 'direct://' });
             }
         } else {
+            console.log('[PROXY] Nenhum proxy configurado. Conexão direta.');
             await isolatedSession.setProxy({ proxyRules: 'direct://' });
         }
 
@@ -13198,6 +13214,7 @@ async function handleAbrirNavegador(event, rawPerfil) {
                 username: perfil.proxy.username,
                 password: perfil.proxy.password ?? ''
             });
+            console.log(`[PROXY] Credenciais armazenadas para wcId ${view.webContents.id}: user=${perfil.proxy.username}`);
         }
 
         // Carregar URL no BrowserView
@@ -13222,12 +13239,49 @@ ipcMain.on('abrir-navegador-secure', (event, encryptedPerfil) => handleAbrirNave
 // ===================================================================
 // PROXY AUTH
 // ===================================================================
+const proxyAuthAttempts = new Map(); // webContentsId → count
+
 const nossoManipuladorDeLogin = (event, webContents, request, authInfo, callback) => {
     if (!authInfo.isProxy) return callback();
     event.preventDefault();
-    const credentials = proxyCredentials.get(webContents?.id);
-    if (credentials) callback(credentials.username, credentials.password);
-    else callback();
+
+    const wcId = webContents?.id ?? 'N/A';
+    const host = `${authInfo.host}:${authInfo.port}`;
+    const scheme = authInfo.scheme || '?';
+
+    // Limitar tentativas para evitar loop infinito
+    const key = `${wcId}-${host}`;
+    const attempts = (proxyAuthAttempts.get(key) || 0) + 1;
+    proxyAuthAttempts.set(key, attempts);
+
+    if (attempts > 3) {
+        console.error(`[PROXY AUTH] ❌ Máximo de tentativas atingido para ${host} (wcId: ${wcId}). Cancelando.`);
+        callback(); // Sem credenciais → cancela
+        // Reset após 30s para permitir nova tentativa
+        setTimeout(() => proxyAuthAttempts.delete(key), 30000);
+        return;
+    }
+
+    // Buscar credenciais — tentar pelo webContents.id do view
+    let credentials = proxyCredentials.get(wcId);
+
+    // Se não encontrou, buscar por qualquer entrada (pode ser sub-frame ou service worker)
+    if (!credentials) {
+        for (const [id, creds] of proxyCredentials) {
+            credentials = creds;
+            console.warn(`[PROXY AUTH] Credenciais não encontradas para wcId ${wcId}, usando do wcId ${id}`);
+            break;
+        }
+    }
+
+    if (credentials) {
+        console.log(`[PROXY AUTH] ✅ Autenticando ${scheme} ${host} (tentativa ${attempts}/3, wcId: ${wcId})`);
+        callback(credentials.username, credentials.password);
+    } else {
+        console.error(`[PROXY AUTH] ❌ NENHUMA credencial disponível para ${host} (wcId: ${wcId})`);
+        console.error(`[PROXY AUTH] Credenciais armazenadas: ${[...proxyCredentials.keys()].join(', ') || 'nenhuma'}`);
+        callback();
+    }
 };
 
 // ===================================================================
