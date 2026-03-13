@@ -13116,7 +13116,12 @@ async function handleAbrirNavegador(event, rawPerfil) {
         if (!perfil?.link) throw new Error('Perfil ou link inválido.');
 
         await isolatedSession.clearStorageData();
-        if (perfil.userAgent) await isolatedSession.setUserAgent(perfil.userAgent);
+
+        // User Agent: usar o do perfil, ou um Chrome moderno como padrão
+        // Necessário porque o Electron/Nativefier tem Chromium antigo e sites como CapCut bloqueiam
+        const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+        const userAgent = perfil.userAgent || DEFAULT_USER_AGENT;
+        await isolatedSession.setUserAgent(userAgent);
 
         // Baixar cookies do GitHub
         let sessionData = null;
