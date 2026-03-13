@@ -12526,7 +12526,11 @@ function createSecureWindow(perfil, isolatedSession, storageData) {
             preload: path.join(__dirname, 'preload-secure.js'),
             contextIsolation: true,
             nodeIntegration: false,
-            devTools: true
+            devTools: true,
+            webgl: true,
+            experimentalFeatures: true,
+            allowRunningInsecureContent: false,
+            spellcheck: false
         }
     });
 
@@ -13289,7 +13293,17 @@ const nossoManipuladorDeLogin = (event, webContents, request, authInfo, callback
 // INICIALIZAÇÃO
 // ===================================================================
 function startApp() {
+    // Anti-bot
     app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
+
+    // ★ Habilitar recursos que sites como CapCut, Canva, etc. precisam
+    app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer,WebAssembly,WebGL2ComputeContext');
+    app.commandLine.appendSwitch('enable-webgl');
+    app.commandLine.appendSwitch('enable-gpu-rasterization');
+    app.commandLine.appendSwitch('enable-zero-copy');
+    app.commandLine.appendSwitch('ignore-gpu-blocklist');
+    app.commandLine.appendSwitch('enable-accelerated-video-decode');
+    app.commandLine.appendSwitch('enable-native-gpu-memory-buffers');
 
     app.whenReady().then(async () => {
         await limparParticoesAntigas();
