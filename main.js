@@ -13174,27 +13174,23 @@ async function handleAbrirNavegador(event, rawPerfil) {
             const validation = validateProxyConfig(perfil.proxy);
             if (validation.valid) {
                 const t = validation.type;
-                const hasAuth = !!(perfil.proxy.username);
-                const authStr = hasAuth ? `${encodeURIComponent(perfil.proxy.username)}:${encodeURIComponent(perfil.proxy.password ?? '')}@` : '';
                 let proxyRules;
 
+                // Electron setProxy NÃO aceita credenciais na URL.
+                // Formato: apenas protocolo://host:porta
+                // Autenticação: via evento 'login' (app.on('login', ...))
                 if (t === 'socks5' || t === 'socks') {
-                    // SOCKS5: credenciais VÃO na URL (evento login NÃO funciona para SOCKS)
-                    proxyRules = `socks5://${authStr}${perfil.proxy.host}:${validation.port}`;
+                    proxyRules = `socks5://${perfil.proxy.host}:${validation.port}`;
                 } else if (t === 'socks4') {
                     proxyRules = `socks4://${perfil.proxy.host}:${validation.port}`;
                 } else {
-                    // HTTP/HTTPS: credenciais podem ir na URL OU via evento login
-                    // Colocar na URL é mais confiável
-                    proxyRules = `http://${authStr}${perfil.proxy.host}:${validation.port}`;
+                    proxyRules = `http://${perfil.proxy.host}:${validation.port}`;
                 }
 
                 const bypass = [perfil.proxy.bypass || '', '*.envatousercontent.com'].filter(Boolean).join(',');
                 await isolatedSession.setProxy({ proxyRules, proxyBypassRules: bypass });
 
-                // Log sem mostrar senha
-                const safeRules = proxyRules.replace(/:([^@]+)@/, ':***@');
-                console.log(`[PROXY] Tipo: ${t} | Rules: ${safeRules} | Auth: ${hasAuth ? 'SIM (embutido na URL)' : 'NÃO'}`);
+                console.log(`[PROXY] Tipo: ${t} | Host: ${perfil.proxy.host}:${validation.port} | Auth: ${perfil.proxy.username ? 'SIM' : 'NÃO'}`);
             } else {
                 console.warn(`[PROXY] Configuração inválida: ${validation.error}. Usando direto.`);
                 await isolatedSession.setProxy({ proxyRules: 'direct://' });
