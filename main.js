@@ -12526,11 +12526,7 @@ function createSecureWindow(perfil, isolatedSession, storageData) {
             preload: path.join(__dirname, 'preload-secure.js'),
             contextIsolation: true,
             nodeIntegration: false,
-            devTools: true,
-            webgl: true,
-            experimentalFeatures: true,
-            allowRunningInsecureContent: false,
-            spellcheck: false
+            devTools: true
         }
     });
 
@@ -13121,11 +13117,10 @@ async function handleAbrirNavegador(event, rawPerfil) {
 
         await isolatedSession.clearStorageData();
 
-        // User Agent: usar o do perfil, ou um Chrome moderno como padrão
-        // Necessário porque o Electron/Nativefier tem Chromium antigo e sites como CapCut bloqueiam
-        const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-        const userAgent = perfil.userAgent || DEFAULT_USER_AGENT;
-        await isolatedSession.setUserAgent(userAgent);
+        // User Agent: usar apenas se o perfil fornecer
+        if (perfil.userAgent) {
+            await isolatedSession.setUserAgent(perfil.userAgent);
+        }
 
         // Baixar cookies do GitHub
         let sessionData = null;
@@ -13295,15 +13290,6 @@ const nossoManipuladorDeLogin = (event, webContents, request, authInfo, callback
 function startApp() {
     // Anti-bot
     app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
-
-    // ★ Habilitar recursos que sites como CapCut, Canva, etc. precisam
-    app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer,WebAssembly,WebGL2ComputeContext');
-    app.commandLine.appendSwitch('enable-webgl');
-    app.commandLine.appendSwitch('enable-gpu-rasterization');
-    app.commandLine.appendSwitch('enable-zero-copy');
-    app.commandLine.appendSwitch('ignore-gpu-blocklist');
-    app.commandLine.appendSwitch('enable-accelerated-video-decode');
-    app.commandLine.appendSwitch('enable-native-gpu-memory-buffers');
 
     app.whenReady().then(async () => {
         await limparParticoesAntigas();

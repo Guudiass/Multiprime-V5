@@ -44,89 +44,22 @@ const { ipcRenderer, webFrame } = require('electron');
     }
 })();
 
-// ===== ANTI-DETECÇÃO (injetar no MAIN WORLD via webFrame) =====
-(() => {
-    try {
-        webFrame.executeJavaScript(`
-            (function() {
-                try {
-                    // webdriver = false
-                    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+// ===== ANTI-DETECÇÃO =====
+Object.defineProperty(navigator, 'webdriver', { get: () => false });
 
-                    // Plugins Chrome-like
-                    Object.defineProperty(navigator, 'plugins', {
-                        get: () => [
-                            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
-                            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
-                            { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
-                        ],
-                    });
+Object.defineProperty(navigator, 'plugins', {
+    get: () => [
+        { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+        { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+        { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
+    ],
+});
 
-                    // navigator.userAgentData — ESSENCIAL para CapCut, Canva, etc.
-                    // Sites modernos checam isso em vez do userAgent string
-                    if (!navigator.userAgentData || navigator.userAgentData.brands?.some(function(b) { return b.brand.includes('Electron'); })) {
-                        Object.defineProperty(navigator, 'userAgentData', {
-                            get: function() {
-                                return {
-                                    brands: [
-                                        { brand: 'Google Chrome', version: '131' },
-                                        { brand: 'Chromium', version: '131' },
-                                        { brand: 'Not_A Brand', version: '24' }
-                                    ],
-                                    mobile: false,
-                                    platform: 'Windows',
-                                    getHighEntropyValues: function(hints) {
-                                        return Promise.resolve({
-                                            brands: [
-                                                { brand: 'Google Chrome', version: '131.0.0.0' },
-                                                { brand: 'Chromium', version: '131.0.0.0' },
-                                                { brand: 'Not_A Brand', version: '24.0.0.0' }
-                                            ],
-                                            mobile: false,
-                                            platform: 'Windows',
-                                            platformVersion: '15.0.0',
-                                            architecture: 'x86',
-                                            model: '',
-                                            uaFullVersion: '131.0.0.0',
-                                            fullVersionList: [
-                                                { brand: 'Google Chrome', version: '131.0.0.0' },
-                                                { brand: 'Chromium', version: '131.0.0.0' },
-                                                { brand: 'Not_A Brand', version: '24.0.0.0' }
-                                            ]
-                                        });
-                                    }
-                                };
-                            }
-                        });
-                    }
-
-                    // Permissões
-                    var origQuery = navigator.permissions.query.bind(navigator.permissions);
-                    navigator.permissions.query = function(params) {
-                        if (params.name === 'notifications') {
-                            return Promise.resolve({ state: Notification.permission });
-                        }
-                        return origQuery(params);
-                    };
-
-                    // Chrome runtime (alguns sites checam se existe)
-                    if (!window.chrome) {
-                        window.chrome = {};
-                    }
-                    if (!window.chrome.runtime) {
-                        window.chrome.runtime = { connect: function() {}, sendMessage: function() {} };
-                    }
-
-                    console.log('[ANTI-DETECT] Camuflagem aplicada no main world');
-                } catch (e) {
-                    console.error('[ANTI-DETECT] Erro:', e);
-                }
-            })();
-        `, true);
-    } catch (e) {
-        console.error('[ANTI-DETECT] Erro fatal ao injetar:', e);
-    }
-})();
+const originalQuery = window.navigator.permissions.query;
+window.navigator.permissions.query = (parameters) =>
+    parameters.name === 'notifications'
+        ? Promise.resolve({ state: Notification.permission })
+        : originalQuery(parameters);
 
 // ===== AUTO-LOGIN =====
 let autoLoginCredentials = null;
